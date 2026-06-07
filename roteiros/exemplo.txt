@@ -1,0 +1,53 @@
+ROTEIRO 1
+Jensen Huang: O Gênio que Criou a Empresa mais Valiosa do Mundo
+
+Ele nasceu em Taiwan, veio para os Estados Unidos sem falar inglês, e se tornou o homem por trás da empresa mais valiosa do mundo.
+
+Jensen Huang fundou a NVIDIA em 1993 com 30 mil dólares. Na época, todo mundo apostava que as GPUs seriam usadas só para jogos.
+
+Mas Jensen enxergou algo diferente.
+
+Em 2006, ele lançou o CUDA — uma linguagem que permitia usar as GPUs para qualquer tipo de cálculo, não só gráficos.
+
+Ninguém entendeu na época.
+
+Durante 15 anos, a NVIDIA investiu bilhões no CUDA enquanto o mercado achava que era desperdício.
+
+Então veio a inteligência artificial.
+
+De repente, o mundo inteiro precisava exatamente do que a NVIDIA tinha construído em silêncio.
+
+Em 2024, a NVIDIA chegou a 3 trilhões de dólares de valor de mercado — mais do que toda a economia do Brasil.
+
+Jensen Huang não criou uma empresa de chips. Ele criou a infraestrutura da era da IA.
+
+E apostou tudo nisso décadas antes de todo mundo entender.
+
+---
+
+ROTEIRO 2
+O Erro que Destruiu a Kodak
+
+Em 1975, um engenheiro da Kodak inventou a câmera digital.
+
+O nome dele era Steve Sasson.
+
+Ele levou a invenção para os executivos da empresa. A resposta foi: "Guarda isso, não mostra pra ninguém".
+
+A Kodak tinha medo de que a câmera digital canibalizasse o negócio de filmes fotográficos.
+
+O problema é que o mercado de filmes representava 70% do lucro deles.
+
+Então eles enterraram a invenção.
+
+Por 20 anos, a Kodak dominou o mercado fotográfico mundial.
+
+Mas em 1990, a Sony lançou a primeira câmera digital comercial.
+
+E em 2012, a Kodak declarou falência.
+
+A empresa que inventou a câmera digital foi destruída pela câmera digital.
+
+Esse é o paradoxo da inovação: as empresas mais bem-sucedidas são as que têm mais a perder com a mudança.
+
+E é exatamente por isso que elas são as primeiras a serem destruídas por ela.

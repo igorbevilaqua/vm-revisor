@@ -1,0 +1,23 @@
+# Tokens OAuth pessoais (cada pessoa gera o próprio ao autenticar)
+credentials/token.pickle
+credentials/token_write.pickle
+
+# Relatórios gerados (saídas pessoais)
+relatorios/
+
+# Roteiros pessoais (mantém só o exemplo)
+roteiros/*.txt
+!roteiros/exemplo.txt
+
+# Sistema
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Claude Code (configuração local)
+.claude/
+
+# Backups
+preferencias.backup.md

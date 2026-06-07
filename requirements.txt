@@ -1,0 +1,6 @@
+anthropic>=0.40.0
+pdfplumber>=0.11.0
+
+# Integração com Google Docs (leitura e writeback de comentários)
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.100.0
