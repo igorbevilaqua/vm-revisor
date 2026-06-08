@@ -58,7 +58,21 @@ def dividir_paragrafos(texto):
     return [p for p in paragrafos if p.strip()]
 
 def achados_do_paragrafo(paragrafo, achados):
-    return [a for a in achados if (a.get("trecho_original") or "").strip() in paragrafo]
+    # Achados sem trecho_original são sugestões globais — tratados separadamente.
+    return [a for a in achados
+            if (a.get("trecho_original") or "").strip()
+            and (a.get("trecho_original") or "").strip() in paragrafo]
+
+
+def _e_substituicao_direta(trecho: str, correcao: str) -> bool:
+    """Detecta se correcao é de fato um texto para substituir o trecho.
+    Instrução editorial tem ratio de comprimento muito maior que a substituição."""
+    if not trecho:
+        return False
+    # Se correcao for >3x o trecho E >150 chars, é quase certamente instrução editorial.
+    if len(correcao) > max(150, 3 * len(trecho)):
+        return False
+    return True
 
 # ─── Aplicação no Google Doc ─────────────────────────────────────────────────
 
@@ -176,48 +190,99 @@ def revisar_roteiro(roteiro, url):
             if trecho == correcao:
                 continue
 
+            substituicao_direta = _e_substituicao_direta(trecho, correcao)
+
             if obrig:
                 print(vermelho(f"⛔ Correção obrigatória  [{camada} · {conf}%]"))
             else:
                 print(amarelo(f"✨ Otimização opcional   [{camada} · {conf}%]"))
 
             print(f"   Antes:  {negrito(trecho)}")
-            print(f"   Depois: {negrito(correcao)}")
+
+            if substituicao_direta:
+                print(f"   Depois: {negrito(correcao)}")
+            else:
+                print(amarelo("   ⚠️  Sugestão editorial (não é substituição direta):"))
+                print(f"   {correcao}")
+
             print(cinza(f"   Por quê: {porque}"))
 
-            while True:
-                resp = input("\n   [a]plicar  [e]ditar  [p]ular  [q]sair → ").strip().lower()
-                if resp == "a":
-                    correcoes_aprovadas.append((trecho, correcao))
-                    print(verde("   ✅ Aprovado"))
-                    break
-                elif resp == "e":
-                    novo = input(f"   Novo texto (vai substituir «{trecho}»): ").strip()
-                    if novo:
-                        correcoes_aprovadas.append((trecho, novo))
-                        print(verde("   ✅ Editado"))
-                        motivo = input(cinza("   Registrar motivo da edição? (Enter pra pular): ")).strip()
-                        ensinamentos.append({
-                            **achado,
-                            "_tipo_decisao": "editar",
-                            "_correcao_original": correcao,
-                            "_versao_usuario": novo,
-                            "_motivo": motivo,
-                        })
+            if not substituicao_direta:
+                # Só pode editar ou pular — não tem como aplicar automaticamente.
+                while True:
+                    resp = input("\n   [e]ditar texto substituto  [p]ular  [q]sair → ").strip().lower()
+                    if resp == "e":
+                        novo = input(f"   Novo texto (vai substituir «{trecho}»): ").strip()
+                        if novo:
+                            correcoes_aprovadas.append((trecho, novo))
+                            print(verde("   ✅ Editado"))
+                            ensinamentos.append({
+                                **achado,
+                                "_tipo_decisao": "editar",
+                                "_correcao_original": correcao,
+                                "_versao_usuario": novo,
+                                "_motivo": "",
+                            })
+                        else:
+                            print(cinza("   Pulado (texto vazio)"))
+                            ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": ""})
+                        break
+                    elif resp == "p":
+                        motivo = input(cinza("   Motivo (opcional, Enter pra pular): ")).strip()
+                        ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
+                        print(cinza("   Pulado"))
+                        break
+                    elif resp == "q":
+                        print("\nRevisão interrompida.")
+                        return correcoes_aprovadas, ensinamentos
                     else:
-                        print(cinza("   Pulado (texto vazio)"))
-                        ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": ""})
-                    break
-                elif resp == "p":
-                    motivo = input(cinza("   Motivo (opcional, Enter pra pular): ")).strip()
-                    ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
-                    print(cinza("   Pulado"))
-                    break
-                elif resp == "q":
-                    print("\nRevisão interrompida.")
-                    return correcoes_aprovadas, ensinamentos
-                else:
-                    print(cinza("   Digite a, e, p ou q."))
+                        print(cinza("   Digite e, p ou q."))
+            else:
+                while True:
+                    resp = input("\n   [a]plicar  [e]ditar  [p]ular  [q]sair → ").strip().lower()
+                    if resp == "a":
+                        correcoes_aprovadas.append((trecho, correcao))
+                        print(verde("   ✅ Aprovado"))
+                        break
+                    elif resp == "e":
+                        novo = input(f"   Novo texto (vai substituir «{trecho}»): ").strip()
+                        if novo:
+                            correcoes_aprovadas.append((trecho, novo))
+                            print(verde("   ✅ Editado"))
+                            motivo = input(cinza("   Registrar motivo da edição? (Enter pra pular): ")).strip()
+                            ensinamentos.append({
+                                **achado,
+                                "_tipo_decisao": "editar",
+                                "_correcao_original": correcao,
+                                "_versao_usuario": novo,
+                                "_motivo": motivo,
+                            })
+                        else:
+                            print(cinza("   Pulado (texto vazio)"))
+                            ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": ""})
+                        break
+                    elif resp == "p":
+                        motivo = input(cinza("   Motivo (opcional, Enter pra pular): ")).strip()
+                        ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
+                        print(cinza("   Pulado"))
+                        break
+                    elif resp == "q":
+                        print("\nRevisão interrompida.")
+                        return correcoes_aprovadas, ensinamentos
+                    else:
+                        print(cinza("   Digite a, e, p ou q."))
+
+    # ── Sugestões globais (sem trecho) — apenas informativas ─────────────────
+    globais = [a for a in achados if not (a.get("trecho_original") or "").strip()]
+    if globais:
+        print(f"\n{'─' * 62}")
+        print(cinza("💡 Sugestões gerais (sem âncora no texto — apenas para leitura):"))
+        for a in globais:
+            camada = a.get("camada", "")
+            conf   = a.get("confianca", 0)
+            print(f"\n   [{camada} · {conf}%]  {(a.get('correcao') or '').strip()}")
+            print(cinza(f"   Por quê: {(a.get('porque') or '').strip()}"))
+        print()
 
     # ── Fim do roteiro: aplicar ───────────────────────────────────────────────
     print(f"\n{'═' * 62}")
