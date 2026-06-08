@@ -490,7 +490,7 @@ def main():
         print("🔍 Analisando o roteiro com 9 agentes em paralelo...")
         print("   Aguarde, isso leva cerca de 1-2 minutos.\n")
         resultado = subprocess.run(
-            [sys.executable, "revisar.py", "--gdocs", args.gdocs],
+            [sys.executable, "revisar.py", "--gdocs", args.gdocs, "--modo", "relatorio"],
             cwd=Path(__file__).parent,
             stdout=subprocess.DEVNULL
         )

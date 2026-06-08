@@ -321,7 +321,15 @@ def salvar_relatorio(resultados: list[dict], pasta_saida: Path):
     arquivo.write_text("\n".join(linhas), encoding="utf-8")
 
     # JSON estruturado — consumido pelo writeback do Google Docs e pelo feedback
-    payload = [
+    payload = _payload_json(resultados)
+    arquivo_json.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return arquivo, arquivo_json
+
+
+def _payload_json(resultados: list[dict]) -> list[dict]:
+    return [
         {
             "numero": r["numero"],
             "titulo": r["titulo"],
@@ -331,10 +339,128 @@ def salvar_relatorio(resultados: list[dict], pasta_saida: Path):
         }
         for r in resultados
     ]
-    arquivo_json.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return arquivo, arquivo_json
+
+
+# ─── Menu de entrada ─────────────────────────────────────────────────────────
+
+def mostrar_menu_modo(roteiros: list, url_gdocs: str | None) -> str:
+    """Mostra sumário do documento carregado e pergunta o tipo de revisão.
+    Retorna 'relatorio', 'dinamica' ou 'tabela'."""
+    print()
+    print("═" * 62)
+    n = len(roteiros)
+    print(f"  {n} roteiro{'s' if n > 1 else ''} para revisar:")
+    for r in roteiros:
+        print(f"    {r['numero']}. {r['titulo'][:56]}")
+    print("═" * 62)
+    print()
+    print("  Que tipo de revisão?")
+    print()
+    print("   [1] Relatório       — relatório em lista no Google Docs")
+    print("   [2] Dinâmica        — parágrafo a parágrafo, 1 roteiro por vez")
+    print("   [3] Tabela Interativa — (em breve)")
+    print()
+    while True:
+        resp = input("  → ").strip()
+        if resp == "1":
+            return "relatorio"
+        elif resp == "2":
+            return "dinamica"
+        elif resp == "3":
+            return "tabela"
+        else:
+            print("  Digite 1, 2 ou 3.")
+
+
+# ─── Modo Relatório ──────────────────────────────────────────────────────────
+
+async def modo_relatorio(roteiros, pdfs, args):
+    """Processa todos os roteiros e gera o relatório em lista (Google Docs + JSON)."""
+    import json as _json
+
+    verbose = not args.silencioso
+    resultados = []
+    for roteiro in roteiros:
+        cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
+        resultado = await processar_roteiro(roteiro, pdfs, verbose=verbose, cliente=cliente,
+                                            verificar_web=args.verificar_web)
+        resultados.append(resultado)
+        print(f"\n{'─'*60}")
+        print(resultado["relatorio"])
+
+    pasta_relatorios = Path(__file__).parent / "relatorios"
+    pasta_relatorios.mkdir(exist_ok=True)
+    arquivo_txt, arquivo_json = salvar_relatorio(resultados, pasta_relatorios)
+
+    print(f"\n\n✅ Revisão concluída!")
+    print(f"📁 Relatório:  {arquivo_txt}")
+    print(f"🧩 Achados (JSON): {arquivo_json}")
+
+    print(f"\n📋 Gerando relatório de correções em lista...")
+    try:
+        from relatorio_gdocs import gerar_doc_lista
+        link = gerar_doc_lista(arquivo_json)
+        print(f"   ✅ Google Doc: {link}")
+    except Exception as e:
+        from relatorio_correcoes import gerar_relatorio
+        saida = gerar_relatorio(arquivo_json)
+        print(f"   ⚠️  Google Docs indisponível ({e.__class__.__name__}). Salvo localmente:")
+        print(f"   📄 {saida}")
+
+
+# ─── Modo Dinâmica ───────────────────────────────────────────────────────────
+
+async def modo_dinamica(roteiros, pdfs, args, url_gdocs):
+    """9 agentes → revisão interativa → aplica no doc → próximo roteiro.
+
+    Só chama os agentes para 1 roteiro por vez (economia de tokens).
+    O JSON é salvo de forma incremental após cada roteiro processado.
+    """
+    import json as _json
+    from revisar_dinamico import revisar_roteiro, loop_aprendizado
+
+    pasta_relatorios = Path(__file__).parent / "relatorios"
+    pasta_relatorios.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    arquivo_json = pasta_relatorios / f"revisao_{timestamp}.json"
+
+    todos_resultados = []
+    todos_ensinamentos = []
+
+    for i, roteiro in enumerate(roteiros):
+        print(f"\n{'═'*62}")
+        print(f"  [{i + 1}/{len(roteiros)}] Analisando: {roteiro['titulo'][:50]}")
+        print(f"  Rodando 9 agentes em paralelo... (1-2 min)")
+        print(f"{'═'*62}")
+
+        cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
+        resultado = await processar_roteiro(roteiro, pdfs, verbose=True, cliente=cliente,
+                                            verificar_web=args.verificar_web)
+        todos_resultados.append(resultado)
+
+        # Salva JSON incremental — dados disponíveis mesmo se o usuário interromper
+        arquivo_json.write_text(
+            _json.dumps(_payload_json(todos_resultados), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        # Revisão interativa (inclui a pergunta de gravação no Google Doc ao final)
+        _, ensinamentos = revisar_roteiro(resultado, url_gdocs)
+        todos_ensinamentos.extend(ensinamentos)
+
+        # Pergunta sobre próximo roteiro (exceto no último)
+        if i + 1 < len(roteiros):
+            proximo_titulo = roteiros[i + 1]["titulo"][:48]
+            resp = input(
+                f"\n▶ Avançar para [{i + 2}/{len(roteiros)}] «{proximo_titulo}»? [s/n] → "
+            ).strip().lower()
+            if resp != "s":
+                break
+
+    loop_aprendizado(todos_ensinamentos)
+
+    print(f"\n🧩 JSON salvo: {arquivo_json}")
+    print("\n🎉 Revisão dinâmica concluída.")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -349,9 +475,9 @@ async def main():
     parser.add_argument("--cliente",   "-c", help="Nome do cliente/criador que vai performar (aparece no comando). Se omitido, tenta detectar no documento.")
     parser.add_argument("--verificar-web", action="store_true", help="Fact-check confere as afirmações com busca real na web (mais lento e com custo).")
     parser.add_argument("--silencioso","-s", action="store_true", help="Menos output no terminal")
+    parser.add_argument("--modo",      "-m", choices=["relatorio", "dinamica"],
+                        help="Pula o menu e vai direto para o modo especificado.")
     args = parser.parse_args()
-
-    verbose = not args.silencioso
 
     # Carrega PDFs
     print("\n📚 Carregando base de conhecimento...")
@@ -361,18 +487,16 @@ async def main():
     texto, roteiros_gdoc = coletar_texto(args)
 
     if roteiros_gdoc is not None:
-        # Veio do Google Docs — já separado
         roteiros = roteiros_gdoc
         print(f"\n🎬 {len(roteiros)} roteiro(s) carregado(s) do Google Docs")
     elif texto:
-        # Veio de texto — separa aqui
         roteiros = separar_roteiros(texto)
         print(f"\n🎬 {len(roteiros)} roteiro(s) detectado(s)")
     else:
         print("❌ Nenhum texto fornecido.")
         sys.exit(1)
 
-    # Pula roteiros já revisados (marcados com "(revisado)" no título, após a headline)
+    # Pula roteiros já marcados como revisados
     marcados = [r for r in roteiros if re.search(r"revisad[oa]", r.get("titulo", ""), re.IGNORECASE)]
     if marcados:
         roteiros = [r for r in roteiros if r not in marcados]
@@ -381,39 +505,17 @@ async def main():
         print("✅ Todos os roteiros já estão marcados como revisados. Nada a revisar.")
         return
 
-    # Processa cada roteiro. Prioridade do cliente:
-    # --cliente  >  título do Google Doc (roteiro["cliente"])  >  rótulo no texto
-    resultados = []
-    for roteiro in roteiros:
-        cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
-        resultado = await processar_roteiro(roteiro, pdfs, verbose=verbose, cliente=cliente,
-                                            verificar_web=args.verificar_web)
-        resultados.append(resultado)
+    # Modo: usa --modo se fornecido, senão exibe o menu interativo
+    modo = args.modo or mostrar_menu_modo(roteiros, args.gdocs)
 
-        # Mostra resumo inline
-        print(f"\n{'─'*60}")
-        print(resultado["relatorio"])
+    if modo == "relatorio":
+        await modo_relatorio(roteiros, pdfs, args)
 
-    # Salva relatório
-    pasta_relatorios = Path(__file__).parent / "relatorios"
-    pasta_relatorios.mkdir(exist_ok=True)
-    arquivo_txt, arquivo_json = salvar_relatorio(resultados, pasta_relatorios)
+    elif modo == "dinamica":
+        await modo_dinamica(roteiros, pdfs, args, args.gdocs)
 
-    print(f"\n\n✅ Revisão concluída!")
-    print(f"📁 Relatório:  {arquivo_txt}")
-    print(f"🧩 Achados (JSON): {arquivo_json}")
-
-    # Relatório de correções em lista — tenta Google Docs, cai para .md local
-    print(f"\n📋 Gerando relatório de correções em lista...")
-    try:
-        from relatorio_gdocs import gerar_doc_lista
-        link = gerar_doc_lista(arquivo_json)
-        print(f"   ✅ Google Doc: {link}")
-    except Exception as e:
-        from relatorio_correcoes import gerar_relatorio
-        saida = gerar_relatorio(arquivo_json)
-        print(f"   ⚠️  Google Docs indisponível ({e.__class__.__name__}). Salvo localmente:")
-        print(f"   📄 {saida}")
+    elif modo == "tabela":
+        print("\n⏳ Tabela Interativa ainda não está disponível. Escolha outro modo.")
 
 
 if __name__ == "__main__":
