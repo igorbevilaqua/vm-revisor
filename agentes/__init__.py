@@ -16,6 +16,18 @@ from pathlib import Path
 
 import anthropic
 
+# ─── Carrega API key do config.txt se não estiver no ambiente ─────────────────
+_RAIZ_CONFIG = Path(__file__).parent.parent
+_CONFIG_PATH = _RAIZ_CONFIG / "config.txt"
+
+if not os.environ.get("ANTHROPIC_API_KEY") and _CONFIG_PATH.exists():
+    for _linha in _CONFIG_PATH.read_text(encoding="utf-8").splitlines():
+        if _linha.startswith("ANTHROPIC_API_KEY="):
+            _valor = _linha.split("=", 1)[1].strip()
+            if _valor and _valor != "cole-sua-chave-aqui":
+                os.environ["ANTHROPIC_API_KEY"] = _valor
+            break
+
 
 # ─── Contrato de saída (schema dos achados) ──────────────────────────────────
 
