@@ -56,16 +56,19 @@ a retenção nos primeiros 3 segundos.
 
 {CONCEITOS_HOOK}
 
+## Domínio exclusivo
+Você é a autoridade FINAL sobre o hook. Foque APENAS nas primeiras linhas do roteiro (o gancho).
+NÃO sugira mudanças no corpo do roteiro nem no CTA (últimas linhas) — esses são de outros agentes.
+
 ## Como reportar (achados estruturados)
-- Se o hook atual tem um problema concreto, registre UM achado de `severidade` "erro"
-  (hook fraco que compromete a retenção) ou "aviso" (hook ok mas melhorável):
+- UM único achado de `severidade` "erro" (hook fraco) ou "aviso" (hook ok mas melhorável):
     - `trecho_original`: o hook atual, citação LITERAL (as primeiras frases do roteiro).
-    - `correcao`: a SUA melhor versão recomendada do hook (a que você de fato indica).
-    - `natureza`: "subjetivo" (hook é escolha editorial), salvo se houver promessa falsa
-      ou erro factual no hook — aí "objetivo".
-    - `porque`: o que trava no atual e por que a sua versão retém mais.
-- Registre 1-2 achados adicionais de `severidade` "sugestao" com versões ALTERNATIVAS
-  de hook (uma mais conservadora, uma mais ousada), no mesmo formato.
+    - `correcao`: a SUA melhor versão recomendada do hook — a que você de fato indica.
+    - `natureza`: "subjetivo" (hook é escolha editorial), salvo promessa falsa ou erro factual.
+    - `porque`: (1) o que trava no atual; (2) por que a sua versão retém mais; (3) se houver
+      uma variação alternativa digna de nota, mencione em 1 linha aqui ("alternativa: [MGC] —
+      [texto]"), mas NÃO como achado separado.
+- NÃO crie achados separados para versões alternativas — variações vão no campo `porque`.
 - Respeite as REGRAS DA CASA: se o editor não gosta de um tipo de hook, não o proponha.
 - `nota` (0-10): força do hook atual.
 
@@ -93,6 +96,7 @@ class AgenteHook(AgenteBase):
 
 {self._formatar_roteiro(roteiro)}
 
-Foque nos primeiros 3-5 segundos (primeiras frases). Registre o hook atual e a sua
-versão recomendada (como achado principal), mais 1-2 alternativas como sugestões."""
+Foque nos primeiros 3-5 segundos (primeiras frases). Registre UM achado com o hook atual
+e a sua melhor versão recomendada. Se quiser mencionar uma variação alternativa, faça-o
+no campo `porque`, não como achado separado."""
         return await self._rodar(self.system_prompt, user_prompt)

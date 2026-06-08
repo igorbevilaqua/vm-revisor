@@ -57,19 +57,23 @@ versões fortes, 100% adaptadas ao TEMA deste roteiro específico.
 {PLAYBOOK_CTA}
 {bloco_cliente(cliente)}{complemento}
 
+## Domínio exclusivo
+Você é a autoridade FINAL sobre o CTA. Foque APENAS nas últimas linhas do roteiro (o comando).
+NÃO sugira mudanças no hook (abertura) nem no corpo narrativo — esses são de outros agentes.
+
 ## Como reportar (achados estruturados)
-- Achado PRINCIPAL sobre o CTA atual:
+- UM único achado sobre o CTA atual:
     - `trecho_original`: o CTA atual, citação literal (vazio se AUSENTE).
-    - `correcao`: a SUA melhor versão de CTA com Esteróides recomendada para este roteiro.
-    - `porque`: o problema do atual (ausente/genérico/múltiplas ações/posição/gatilho errado)
-      e qual gatilho a sua versão usa e por que cabe aqui.
+    - `correcao`: a SUA melhor versão de CTA com Esteróides — a mais indicada para ESTE roteiro.
+    - `porque`: (1) o problema do CTA atual; (2) qual gatilho a sua versão usa e por que cabe
+      aqui; (3) se houver uma alternativa secundária digna de nota, mencione-a AQUI, em 1 linha
+      ("alternativa: [gatilho X] — [texto]"), mas NÃO como achado separado.
     - `severidade`: "erro" se CTA ausente ou genérico/quebrado; "aviso" se ok mas melhorável.
     - `natureza`: "objetivo" para ausência/regra violada (sem CTA, múltiplas ações); "subjetivo"
       para a escolha de gatilho.
-- 1-2 achados "sugestao" com versões ALTERNATIVAS de CTA usando gatilhos DIFERENTES.
-- Se o comando atual usar um padrão que FUNCIONA mas NÃO está entre os 7 gatilhos do playbook,
-  registre um achado "sugestao" sinalizando isso (ex.: "este comando usa um padrão eficaz fora dos
-  7 gatilhos — pode valer adicionar ao playbook"). O playbook pode evoluir.
+- NÃO crie achados separados para versões alternativas — variações vão no campo `porque`.
+- Se o comando atual usar um padrão eficaz fora dos 7 gatilhos do playbook, mencione isso
+  no `porque` do achado principal.
 - Respeite as REGRAS DA CASA (gatilhos/estilo de CTA que o editor prefere ou rejeita).
 - `nota` (0-10): força do CTA atual."""
 
@@ -91,7 +95,7 @@ class AgenteCTA(AgenteBase):
 
 {self._formatar_roteiro(roteiro)}
 
-Identifique o CTA atual (ou ausência) e registre a sua versão recomendada como achado
-principal, mais 1-2 alternativas com gatilhos diferentes. Cada versão 100% adaptada ao
-tema deste roteiro — nunca genérica."""
+Identifique o CTA atual (ou ausência) e registre UM achado com a sua melhor versão
+recomendada. Se quiser mencionar uma alternativa secundária, faça-o no campo `porque`,
+não como achado separado. 100% adaptado ao tema deste roteiro — nunca genérico."""
         return await self._rodar(self.system_prompt, user_prompt)

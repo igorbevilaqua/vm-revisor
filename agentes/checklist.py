@@ -93,6 +93,10 @@ quem reporta, não o checklist.
     - `porque`: qual critério do checklist está em jogo.
     - `severidade`: "erro" se o critério é obrigatório e está violado; "aviso" se parcial.
     - `natureza`: "objetivo" se o critério é uma regra clara da VML; "subjetivo" se é juízo de qualidade.
+- Para critérios de hook e CTA: você pode SINALIZAR ausência ou fraqueza (ex.: "hook
+  genérico detectado", "CTA ausente"), mas NÃO proponha reescrita — a otimização do hook
+  e do CTA é exclusiva dos agentes especializados. Use `correcao` apenas para descrever
+  o que está faltando estruturalmente, não para propor o texto.
 - NÃO crie critérios que não estejam no checklist. Critério atendido não vira achado.
 - `nota` (0-10): aderência geral ao checklist. `resumo`: X de Y critérios atendidos."""
 

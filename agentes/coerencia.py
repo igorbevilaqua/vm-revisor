@@ -121,6 +121,13 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
 4. SENTIMENTO — dada a estrutura, os BEATS exigidos para a emoção disparar estão presentes
    e na ordem certa? Aplique os modos de falha acima. A emoção tem um eixo dominante claro?
 
+## Restrição de domínio
+Você pode sinalizar problemas de coerência que envolvam o hook ou o CTA (ex.: setup no
+hook sem payoff no corpo), mas NÃO sugira reescritas do hook (primeiras linhas) nem do CTA
+(últimas linhas) — esses são de responsabilidade dos agentes especializados. Nesses casos,
+use `trecho_original` vazio e descreva o gap no `porque` com `correcao` apontando o que
+falta no CORPO do roteiro.
+
 ## Como reportar (achados estruturados)
 - Um achado por gap. Comece o campo `porque` com "[Entendimento] " ou "[Sentimento] "
   para deixar claro qual coesão quebra.

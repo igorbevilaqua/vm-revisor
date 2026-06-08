@@ -33,6 +33,7 @@ from agentes.factcheck import AgenteFactCheck, tem_fato_verificavel
 from agentes.hook import AgenteHook
 from agentes.viral import AgenteViral
 from agentes.cta import AgenteCTA
+from agentes.contexto import AgenteContexto
 from agentes.consolidador import AgenteConsolidador
 
 
@@ -105,6 +106,25 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
     headline = roteiro.get("headline")
     texto_agentes = f"HEADLINE: {headline}\n\n{texto}" if headline else texto
 
+    # ── Fase 0: contexto narrativo (Haiku, rápido) ────────────────────────────
+    if verbose:
+        print("  🔍 Extraindo contexto narrativo...")
+    try:
+        contexto_str = await AgenteContexto().analisar_contexto(texto_agentes)
+    except Exception:
+        contexto_str = ""
+
+    # O contexto é injetado como cabeçalho para todos os agentes lerem.
+    if contexto_str:
+        texto_com_contexto = (
+            "[CONTEXTO NARRATIVO — extraído automaticamente antes da revisão]\n"
+            f"{contexto_str}\n"
+            "[/CONTEXTO NARRATIVO]\n\n"
+            f"{texto_agentes}"
+        )
+    else:
+        texto_com_contexto = texto_agentes
+
     # Agentes na ordem em que aparecem no painel
     agentes = {
         "ortografia":   AgenteOrtografia(),
@@ -134,7 +154,7 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
 
     # Roda em paralelo
     resultados = await asyncio.gather(
-        *(ag.analisar(texto_agentes) for ag in agentes.values()),
+        *(ag.analisar(texto_com_contexto) for ag in agentes.values()),
         return_exceptions=True,
     )
 
@@ -157,7 +177,7 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
 
     consolidador = AgenteConsolidador()
     consolidado = await consolidador.consolidar(
-        roteiro=texto_agentes,
+        roteiro=texto_com_contexto,
         titulo=titulo,
         numero=numero,
         analises=analises,

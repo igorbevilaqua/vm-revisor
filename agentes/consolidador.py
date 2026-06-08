@@ -23,6 +23,20 @@ CONFIANCA_BLOQUEIO = 70
 # Ordem de severidade para ordenação (maior = mais urgente).
 PESO_SEVERIDADE = {"erro": 3, "aviso": 2, "sugestao": 1}
 
+# Prioridade por camada: autoridade de domínio vence em caso de empate.
+# hook e cta têm prioridade máxima (autoridade exclusiva no seu domínio).
+PRIORIDADE_CAMADA = {
+    "hook":         10,
+    "cta":          10,
+    "ortografia":   8,
+    "factcheck":    8,
+    "coerencia":    6,
+    "checklist":    5,
+    "storytelling": 4,
+    "clareza":      3,
+    "viral":        2,
+}
+
 NOMES_CAMADA = {
     "ortografia":   "Ortografia/Gramática",
     "clareza":      "Clareza/Ritmo",
@@ -53,10 +67,14 @@ def _e_bloqueante(achado: dict) -> bool:
 
 
 def _dominancia(a: dict):
-    """Quão 'forte' é um achado — usado para escolher qual motivo exibir ao fundir."""
-    return (PESO_SEVERIDADE.get(a.get("severidade"), 0),
-            a.get("natureza") == "objetivo",
-            a.get("confianca", 0))
+    """Quão 'forte' é um achado — usado para escolher qual motivo exibir ao fundir.
+    Prioridade de camada desempata quando severidade e confiança são próximas."""
+    return (
+        PRIORIDADE_CAMADA.get(a.get("camada", ""), 0),
+        PESO_SEVERIDADE.get(a.get("severidade"), 0),
+        a.get("natureza") == "objetivo",
+        a.get("confianca", 0),
+    )
 
 
 def _deduplicar(achados: list[dict]) -> list[dict]:
@@ -83,6 +101,34 @@ def _deduplicar(achados: list[dict]) -> list[dict]:
         merged["confianca"] = max(x.get("confianca", 0) for x in grupo)
         fundidos.append(merged)
     return fundidos + soltos
+
+
+def _dedup_contencao(achados: list[dict]) -> list[dict]:
+    """Segundo passe de dedup: dentro da mesma camada dominante, remove achados cujo
+    trecho está CONTIDO em outro achado maior da mesma camada (evita que alternativas
+    com recortes menores cheguem ao relatório junto com o trecho completo)."""
+    com_trecho = [a for a in achados if _norm(a.get("trecho_original", ""))]
+    sem_trecho = [a for a in achados if not _norm(a.get("trecho_original", ""))]
+
+    removidos: set[int] = set()
+    for i, a in enumerate(com_trecho):
+        if i in removidos:
+            continue
+        trecho_a = _norm(a.get("trecho_original", ""))
+        camada_a = a.get("camada", "")
+        for j, b in enumerate(com_trecho):
+            if i == j or j in removidos:
+                continue
+            trecho_b = _norm(b.get("trecho_original", ""))
+            # A está contido em B (B é o maior), mesma camada dominante, B é ao menos tão forte
+            if (trecho_a in trecho_b
+                    and trecho_a != trecho_b
+                    and b.get("camada", "") == camada_a
+                    and _dominancia(b) >= _dominancia(a)):
+                removidos.add(i)
+                break
+
+    return [a for i, a in enumerate(com_trecho) if i not in removidos] + sem_trecho
 
 
 def _ordenar(achados: list[dict]) -> list[dict]:
@@ -142,7 +188,7 @@ class AgenteConsolidador(AgenteBase):
                 notas[camada] = res["nota"]
             resumos[camada] = res.get("resumo", "")
 
-        achados = _ordenar(_deduplicar(todos))
+        achados = _ordenar(_dedup_contencao(_deduplicar(todos)))
 
         bloqueantes = [a for a in achados if _e_bloqueante(a)]
         otimizacoes = [a for a in achados if not _e_bloqueante(a)]

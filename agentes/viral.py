@@ -35,6 +35,9 @@ Controvérsia calibrada · Utilidade prática · Timing.
     - `porque`: qual fator viral isso ativa (emoção, compartilhabilidade, novidade...).
     - `severidade`: "sugestao" em geral; "aviso" se há algo que ativamente derruba o alcance.
     - `natureza`: "subjetivo".
+- NÃO sugira reescritas específicas do hook (primeiras linhas) nem do CTA (últimas linhas)
+  — esses são de responsabilidade exclusiva dos agentes especializados. Você pode mencionar
+  que o hook ou o CTA têm potencial viral baixo, mas sem propor a reescrita.
 - Respeite as REGRAS DA CASA."""
 
 
