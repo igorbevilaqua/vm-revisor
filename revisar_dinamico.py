@@ -73,6 +73,47 @@ def _trecho_sobrepos(trecho: str, processados: set) -> bool:
     return any(t in p or p in t for p in processados)
 
 
+def _minimizar_trecho(trecho: str, correcao: str, min_anchor: int = 20) -> tuple[str, str]:
+    """Encurta o par (trecho, correcao) ao segmento mínimo contendo a diferença real.
+    Preserva pelo menos min_anchor chars de âncora para evitar falsos matches no doc."""
+    if not trecho or not correcao or trecho == correcao:
+        return trecho, correcao
+
+    # Prefixo comum
+    pref = 0
+    while pref < min(len(trecho), len(correcao)) and trecho[pref] == correcao[pref]:
+        pref += 1
+
+    # Sufixo comum nos restos
+    t_rest = trecho[pref:]
+    c_rest = correcao[pref:]
+    suf = 0
+    while suf < min(len(t_rest), len(c_rest)) and t_rest[-(suf + 1)] == c_rest[-(suf + 1)]:
+        suf += 1
+
+    # Núcleo: parte que realmente muda
+    t_core = t_rest[: len(t_rest) - suf] if suf else t_rest
+    c_core = c_rest[: len(c_rest) - suf] if suf else c_rest
+
+    # Contexto de sufixo (âncora de fechamento) — primeiros chars do SUFFIX comum
+    suf_ctx = min(suf, 10)
+    sufixo_ancora = t_rest[len(t_core) : len(t_core) + suf_ctx]
+
+    # Contexto de prefixo (âncora de abertura) — últimos chars do PREFIX comum
+    ctx = max(0, min_anchor - len(t_core) - suf_ctx)
+    pref_start = max(0, pref - ctx)
+    # Snap ao limite de palavra para não cortar no meio de token
+    while pref_start > 0 and trecho[pref_start - 1] not in (" ", "\n", "\t", ".", ",", ";"):
+        pref_start -= 1
+
+    prefixo_ancora = trecho[pref_start:pref]
+    novo_t = prefixo_ancora + t_core + sufixo_ancora
+    novo_c = prefixo_ancora + c_core + sufixo_ancora
+
+    # Sanidade: se ficaram iguais (caso degenerado), retorna originais
+    return (novo_t, novo_c) if novo_t != novo_c else (trecho, correcao)
+
+
 def _e_substituicao_direta(trecho: str, correcao: str) -> bool:
     """Detecta se correcao é de fato um texto para substituir o trecho.
     Instrução editorial tem ratio de comprimento muito maior que a substituição."""
@@ -108,16 +149,24 @@ def aplicar_correcoes(url, correcoes):
     requests = []
     avisos = []
     ignorados = []
-    for trecho, novo in correcoes:
-        if not trecho or not trecho.strip():
-            ignorados.append(f"sem trecho: «{novo[:60]}»")
+    for trecho_orig, novo_orig in correcoes:
+        if not trecho_orig or not trecho_orig.strip():
+            ignorados.append(f"sem trecho: «{novo_orig[:60]}»")
             continue
+
+        # Minimiza ao segmento mínimo que ancora a mudança — menos riscado no doc.
+        trecho, novo = _minimizar_trecho(trecho_orig, novo_orig)
+
+        # Se o trecho minimizado não está no doc, tenta o original como fallback.
         if trecho not in texto_doc:
-            ignorados.append(f"trecho não encontrado no doc: «{trecho[:60]}»")
-            continue
+            if trecho_orig not in texto_doc:
+                ignorados.append(f"trecho não encontrado no doc: «{trecho_orig[:60]}»")
+                continue
+            trecho, novo = trecho_orig, novo_orig
+
         n = contar_ocorrencias(texto_doc, trecho)
         if n > 1:
-            avisos.append(f"  ⚠️  «{trecho[:50]}» aparece {n}x no doc:todas serão trocadas")
+            avisos.append(f"  ⚠️  «{trecho[:50]}» aparece {n}x no doc: todas serão trocadas")
         requests.append({
             "replaceAllText": {
                 "containsText": {"text": trecho, "matchCase": True},
@@ -201,6 +250,13 @@ def revisar_roteiro(roteiro, url):
             obrig   = eh_obrigatorio(achado)
 
             if trecho == correcao:
+                continue
+
+            # Filtra sugestões subjetivas de baixa confiança — ruído imperceptível ao
+            # espectador. Ainda aparecem no relatório; só omitidos no fluxo interativo.
+            if (achado.get("natureza") == "subjetivo"
+                    and achado.get("severidade") in ("sugestao", "aviso")
+                    and achado.get("confianca", 0) < 75):
                 continue
 
             # Marca como processado ANTES de exibir — garante que a trava já valha

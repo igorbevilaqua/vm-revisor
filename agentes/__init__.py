@@ -119,6 +119,23 @@ class AgenteBase:
             f"{self.preferencias}\n"
         )
 
+    # ── Bloco de calibração injetado em todo system prompt estruturado ────────
+    def _bloco_calibracao(self) -> str:
+        return (
+            "\n## CALIBRAÇÃO: IMPACTO MÍNIMO E ÂNCORA PRECISA\n"
+            "Só inclua um achado se a mudança for PERCEPTÍVEL PARA O ESPECTADOR FINAL do\n"
+            "vídeo. Teste: se o roteiro fosse gravado com o trecho original e depois com o\n"
+            "corrigido, o espectador notaria diferença audível, semântica ou de impacto?\n"
+            "Se não → NÃO reporte. Não merecem ser achados: trocar sinônimo sem diferença\n"
+            "de ritmo ou impacto, remover pronome sem ganho real de clareza, ajustar\n"
+            "pontuação sem efeito na locução, reformular frase mantendo o mesmo sentido e\n"
+            "mesmo ritmo.\n"
+            "\nCITE O MÍNIMO em `trecho_original`: o menor segmento que ancora a mudança.\n"
+            "Nunca a frase inteira quando só uma palavra ou expressão muda. Exemplo:\n"
+            "  ERRADO: trecho='Ele fechou em 2008, mas reabriu em 2009.' (frase inteira)\n"
+            "  CERTO:  trecho='2008, mas reabriu' correcao='2008, porém reabriu'\n"
+        )
+
     # ── Chamada estruturada (força JSON via tool use) ─────────────────────────
     def _chamar_api_estruturada(self, system_prompt: str, user_prompt: str,
                                 schema: dict = SCHEMA_ACHADOS) -> dict:
@@ -127,7 +144,7 @@ class AgenteBase:
             max_tokens=self.MAX_TOKENS,
             system=[{
                 "type": "text",
-                "text": system_prompt + self._bloco_preferencias(),
+                "text": system_prompt + self._bloco_preferencias() + self._bloco_calibracao(),
                 "cache_control": {"type": "ephemeral"},  # cacheia tools+system (5 min)
             }],
             tools=[{
