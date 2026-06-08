@@ -87,6 +87,32 @@ def _sem_travessao(texto: str) -> str:
     return texto
 
 
+_VERBOS_INSTRUCAO = (
+    "remover", "remove", "substituir", "substitua", "substituindo",
+    "reduzir", "reduza", "reduzindo",
+    "verificar", "verifique", "verificando",
+    "ajustar", "ajuste", "ajustando",
+    "reordenar", "reordene",
+    "inserir", "insira", "inserindo",
+    "trocar", "troque", "trocando",
+    "corrigir", "corrija", "corrigindo",
+    "adicionar", "adicione", "adicionando",
+    "excluir", "exclua", "excluindo",
+    "eliminar", "elimine", "eliminando",
+    "incluir", "inclua", "incluindo",
+    "reescrever", "reescreva", "reescrevendo",
+)
+
+
+def _e_instrucao_meta(correcao: str) -> bool:
+    """True se `correcao` começa com um verbo de instrução editorial (imperativo/infinitivo).
+    Detecta o caso em que o agente colocou uma instrução no lugar do texto substituto."""
+    if not correcao:
+        return False
+    primeira = correcao.strip().split()[0].lower().rstrip(".,;:)")
+    return primeira in _VERBOS_INSTRUCAO
+
+
 # ─── Classe base ─────────────────────────────────────────────────────────────
 
 _ORDEM_SEVERIDADE = {"sugestao": 1, "aviso": 2, "erro": 3}
@@ -122,7 +148,7 @@ class AgenteBase:
     # ── Bloco de calibração injetado em todo system prompt estruturado ────────
     def _bloco_calibracao(self) -> str:
         return (
-            "\n## CALIBRAÇÃO: IMPACTO MÍNIMO E ÂNCORA PRECISA\n"
+            "\n## CALIBRAÇÃO: IMPACTO MÍNIMO, ÂNCORA PRECISA E CORRECAO CONCRETA\n"
             "Só inclua um achado se a mudança for PERCEPTÍVEL PARA O ESPECTADOR FINAL do\n"
             "vídeo. Teste: se o roteiro fosse gravado com o trecho original e depois com o\n"
             "corrigido, o espectador notaria diferença audível, semântica ou de impacto?\n"
@@ -134,6 +160,19 @@ class AgenteBase:
             "Nunca a frase inteira quando só uma palavra ou expressão muda. Exemplo:\n"
             "  ERRADO: trecho='Ele fechou em 2008, mas reabriu em 2009.' (frase inteira)\n"
             "  CERTO:  trecho='2008, mas reabriu' correcao='2008, porém reabriu'\n"
+            "\n### REGRA CRÍTICA: `correcao` é texto que entra no roteiro — nunca instrução\n"
+            "`correcao` deve conter APENAS o texto literal pronto para substituir o trecho\n"
+            "no roteiro. O leitor vai ver exatamente esse texto no lugar do original.\n"
+            "PROIBIDO em `correcao`: frases que começam com 'Remover', 'Substituir',\n"
+            "'Reduzir', 'Verificar', 'Ajustar', 'Reordenar', 'Inserir', 'Trocar', ou\n"
+            "qualquer outra instrução meta de edição.\n"
+            "Instruções de edição vão SEMPRE no campo `porque`, nunca em `correcao`.\n"
+            "\nSe você não tem o texto exato de reposição (ex.: não sabe qual data é\n"
+            "correta, não sabe quais palavras cortar, ou a mudança é estrutural global):\n"
+            "  → Deixe AMBOS `trecho_original` E `correcao` VAZIOS.\n"
+            "  → Explique o problema e a direção de correção em `porque`.\n"
+            "  → Use o campo `resumo` para observações que não têm substituto concreto.\n"
+            "Achado com instrução em `correcao` é INVÁLIDO e será descartado.\n"
         )
 
     # ── Chamada estruturada (força JSON via tool use) ─────────────────────────
@@ -194,6 +233,13 @@ class AgenteBase:
             correcao = (achado.get("correcao") or "").strip()
             if trecho and trecho == correcao:
                 continue  # antes == depois: achado inválido, descarta
+            if _e_instrucao_meta(correcao):
+                # O agente colocou instrução editorial em correcao — move para porque
+                # e zera ambos os campos de âncora para tratar como nota global.
+                porque_atual = (achado.get("porque") or "").strip()
+                achado["porque"] = f"{porque_atual} [Sugestão estrutural: {correcao}]".strip()
+                achado["trecho_original"] = ""
+                achado["correcao"] = ""
             achados_validos.append(achado)
         resultado["achados"] = achados_validos
         if "resumo" in resultado:
