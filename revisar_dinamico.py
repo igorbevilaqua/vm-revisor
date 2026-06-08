@@ -15,6 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from terminal import patch_stdout
+patch_stdout()
+
 # ─── Cores no terminal ───────────────────────────────────────────────────────
 
 def negrito(s): return f"\033[1m{s}\033[0m"

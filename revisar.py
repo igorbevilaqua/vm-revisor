@@ -18,6 +18,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from terminal import patch_stdout
+patch_stdout()
+
 # Adiciona o diretório raiz ao path
 sys.path.insert(0, str(Path(__file__).parent))
 

@@ -24,6 +24,9 @@ import sys
 import json
 from pathlib import Path
 
+from terminal import patch_stdout
+patch_stdout()
+
 from google_docs import extrair_doc_id, autenticar
 
 # Escrita exige escopos amplos e um token próprio (não mexe no token de leitura).

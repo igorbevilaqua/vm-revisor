@@ -17,6 +17,9 @@ from __future__ import annotations
 import sys
 import json
 from pathlib import Path
+
+from terminal import patch_stdout
+patch_stdout()
 from datetime import datetime
 
 import anthropic

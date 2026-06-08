@@ -13,6 +13,9 @@ import json
 import pickle
 from pathlib import Path
 
+from terminal import patch_stdout
+patch_stdout()
+
 # Escopos necessários (somente leitura)
 SCOPES = [
     "https://www.googleapis.com/auth/documents.readonly",
