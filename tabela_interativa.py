@@ -58,9 +58,42 @@ def _diff_inline(trecho: str, correcao: str) -> bool:
     return max(tw, cw) <= 3
 
 
-def transformar_achado(achado: dict, idx: int) -> dict:
+_VERBOS_INSTRUCAO = {
+    "remover", "remove", "substituir", "substitua", "substituindo",
+    "reduzir", "reduza", "reduzindo",
+    "verificar", "verifique", "verificando",
+    "ajustar", "ajuste", "ajustando",
+    "reordenar", "reordene",
+    "inserir", "insira", "inserindo",
+    "trocar", "troque", "trocando",
+    "corrigir", "corrija", "corrigindo",
+    "adicionar", "adicione", "adicionando",
+    "excluir", "exclua", "excluindo",
+    "eliminar", "elimine", "eliminando",
+    "incluir", "inclua", "incluindo",
+    "reescrever", "reescreva", "reescrevendo",
+}
+
+
+def _correcao_e_instrucao(texto):
+    """True se o texto começa com verbo de instrução editorial — não é substituto literal."""
+    if not texto:
+        return False
+    return texto.strip().split()[0].lower().rstrip(".,;:)") in _VERBOS_INSTRUCAO
+
+
+def transformar_achado(achado, idx):
     trecho = (achado.get("trecho_original") or "").strip()
     correcao = (achado.get("correcao") or "").strip()
+    porque = (achado.get("porque") or "").strip()
+
+    # Segunda camada de defesa: se `correcao` ainda chegou como instrução editorial
+    # (agente ignorou o prompt), zera os dois campos e preserva a nota em `porque`.
+    if _correcao_e_instrucao(correcao):
+        porque = f"{porque} [Sugestão estrutural: {correcao}]".strip()
+        trecho = ""
+        correcao = ""
+
     return {
         "id": f"c{idx:03d}",
         "tipo": "correcao",
@@ -69,7 +102,7 @@ def transformar_achado(achado: dict, idx: int) -> dict:
         "camada": CAMADA_DISPLAY.get(achado.get("camada", ""), achado.get("camada", "")),
         "trecho_original": trecho,
         "correcao": correcao,
-        "porque": (achado.get("porque") or "").strip(),
+        "porque": porque,
         "confianca": achado.get("confianca", 0),
         "diff_inline": _diff_inline(trecho, correcao),
         "relacionado_a": None,
