@@ -64,6 +64,15 @@ def achados_do_paragrafo(paragrafo, achados):
             and (a.get("trecho_original") or "").strip() in paragrafo]
 
 
+def _trecho_sobrepos(trecho: str, processados: set) -> bool:
+    """True se o trecho se sobrepõe a algum trecho já exibido ao usuário.
+    Cobre: (a) trecho idêntico, (b) trecho contido em outro, (c) outro contido neste."""
+    t = (trecho or "").strip()
+    if not t:
+        return False
+    return any(t in p or p in t for p in processados)
+
+
 def _e_substituicao_direta(trecho: str, correcao: str) -> bool:
     """Detecta se correcao é de fato um texto para substituir o trecho.
     Instrução editorial tem ratio de comprimento muito maior que a substituição."""
@@ -169,9 +178,13 @@ def revisar_roteiro(roteiro, url):
     paragrafos = dividir_paragrafos(texto)
     correcoes_aprovadas = []
     ensinamentos = []  # decisões com contexto para o loop de aprendizado
+    trechos_processados: set = set()  # trava: trechos já exibidos (impede duplicatas e sobrepostos)
 
     for i, par in enumerate(paragrafos, 1):
         achados_par = achados_do_paragrafo(par, achados)
+        # Remove achados cujo trecho se sobrepõe a um já exibido (mesmo exato ou contido/contém).
+        achados_par = [a for a in achados_par
+                       if not _trecho_sobrepos(a.get("trecho_original", ""), trechos_processados)]
         if not achados_par:
             continue
 
@@ -189,6 +202,11 @@ def revisar_roteiro(roteiro, url):
 
             if trecho == correcao:
                 continue
+
+            # Marca como processado ANTES de exibir — garante que a trava já valha
+            # para qualquer achado sobreposto que venha logo depois no mesmo parágrafo.
+            if trecho:
+                trechos_processados.add(trecho)
 
             substituicao_direta = _e_substituicao_direta(trecho, correcao)
 
