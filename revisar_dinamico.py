@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Revisão Dinâmica — Viral Media Labs
+Revisão Dinâmica:Viral Media Labs
 Revisão interativa parágrafo a parágrafo, sem precisar do Claude Code.
 
 Uso:
@@ -81,16 +81,27 @@ def aplicar_correcoes(url, correcoes):
 
     requests = []
     avisos = []
+    ignorados = []
     for trecho, novo in correcoes:
+        if not trecho or not trecho.strip():
+            ignorados.append(f"sem trecho: «{novo[:60]}»")
+            continue
+        if trecho not in texto_doc:
+            ignorados.append(f"trecho não encontrado no doc: «{trecho[:60]}»")
+            continue
         n = contar_ocorrencias(texto_doc, trecho)
         if n > 1:
-            avisos.append(f"  ⚠️  «{trecho[:50]}» aparece {n}x no doc — todas serão trocadas")
+            avisos.append(f"  ⚠️  «{trecho[:50]}» aparece {n}x no doc:todas serão trocadas")
         requests.append({
             "replaceAllText": {
                 "containsText": {"text": trecho, "matchCase": True},
                 "replaceText": novo,
             }
         })
+    if ignorados:
+        print(cinza(f"   {len(ignorados)} correção(ões) ignorada(s) (sem âncora no doc):"))
+        for msg in ignorados:
+            print(cinza(f"   • {msg}"))
 
     if avisos:
         print("\n" + "\n".join(avisos))
@@ -140,7 +151,7 @@ def revisar_roteiro(roteiro, url):
 
     paragrafos = dividir_paragrafos(texto)
     correcoes_aprovadas = []
-    pulados = []  # achados rejeitados/pulados para o loop de aprendizado
+    ensinamentos = []  # decisões com contexto para o loop de aprendizado
 
     for i, par in enumerate(paragrafos, 1):
         achados_par = achados_do_paragrafo(par, achados)
@@ -158,6 +169,9 @@ def revisar_roteiro(roteiro, url):
             camada  = achado.get("camada", "")
             conf    = achado.get("confianca", 0)
             obrig   = eh_obrigatorio(achado)
+
+            if trecho == correcao:
+                continue
 
             if obrig:
                 print(vermelho(f"⛔ Correção obrigatória  [{camada} · {conf}%]"))
@@ -179,21 +193,26 @@ def revisar_roteiro(roteiro, url):
                     if novo:
                         correcoes_aprovadas.append((trecho, novo))
                         print(verde("   ✅ Editado"))
+                        motivo = input(cinza("   Registrar motivo da edição? (Enter pra pular): ")).strip()
+                        ensinamentos.append({
+                            **achado,
+                            "_tipo_decisao": "editar",
+                            "_correcao_original": correcao,
+                            "_versao_usuario": novo,
+                            "_motivo": motivo,
+                        })
                     else:
-                        pulados.append(achado)
                         print(cinza("   Pulado (texto vazio)"))
+                        ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": ""})
                     break
                 elif resp == "p":
                     motivo = input(cinza("   Motivo (opcional, Enter pra pular): ")).strip()
-                    a_registrar = dict(achado)
-                    if motivo:
-                        a_registrar["_motivo_rejeicao"] = motivo
-                    pulados.append(a_registrar)
+                    ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
                     print(cinza("   Pulado"))
                     break
                 elif resp == "q":
                     print("\nRevisão interrompida.")
-                    return correcoes_aprovadas, pulados
+                    return correcoes_aprovadas, ensinamentos
                 else:
                     print(cinza("   Digite a, e, p ou q."))
 
@@ -202,9 +221,9 @@ def revisar_roteiro(roteiro, url):
 
     if not correcoes_aprovadas:
         print(verde("✅ Nenhuma correção aprovada neste roteiro."))
-        return correcoes_aprovadas, pulados
+        return correcoes_aprovadas, ensinamentos
 
-    print(negrito(f"Fim do roteiro — {len(correcoes_aprovadas)} correção(ões) aprovada(s):"))
+    print(negrito(f"Fim do roteiro:{len(correcoes_aprovadas)} correção(ões) aprovada(s):"))
     for trecho, novo in correcoes_aprovadas:
         print(f"  • «{trecho[:55]}»")
         print(f"    → «{novo[:55]}»")
@@ -217,66 +236,77 @@ def revisar_roteiro(roteiro, url):
             print(verde(f"✅ {n} substituição(ões) aplicada(s) no doc."))
             print(cinza("   (Arquivo → Histórico de versões para reverter, se precisar)"))
     else:
-        print(cinza("(Sem link do doc — correções não foram gravadas)"))
+        print(cinza("(Sem link do doc:correções não foram gravadas)"))
 
-    return correcoes_aprovadas, pulados
+    return correcoes_aprovadas, ensinamentos
 
 
 # ─── Loop de aprendizado ────────────────────────────────────────────────────
 
-def loop_aprendizado(todos_pulados):
-    """Oferece transformar os achados pulados em regras no preferencias.md."""
-    if not todos_pulados:
+def loop_aprendizado(ensinamentos):
+    """Processa decisões com contexto e gera regras no preferencias.md.
+
+    Suporta dois tipos de ensinamento:
+    - 'pular': agente sugeriu X, usuário rejeitou (com motivo opcional)
+    - 'editar': agente sugeriu X, usuário preferiu Y (com motivo opcional)
+    """
+    # Filtra só os ensinamentos que têm sinal suficiente para gerar regra
+    uteis = [
+        e for e in ensinamentos
+        if e.get("_motivo") or e.get("_tipo_decisao") == "editar"
+    ]
+    if not uteis:
         return
 
+    n_pular  = sum(1 for e in uteis if e.get("_tipo_decisao") == "pular")
+    n_editar = sum(1 for e in uteis if e.get("_tipo_decisao") == "editar")
+
     print(f"\n{'═' * 62}")
-    print(negrito(f"🧠 Aprendizado — {len(todos_pulados)} sugestão(ões) pulada(s)"))
-    print("Quer ensinar o sistema sobre suas rejeições?")
-    print(cinza("Isso gera regras novas no preferencias.md para as próximas revisões."))
+    print(negrito(f"🧠 Aprendizado: {len(uteis)} ensinamento(s) registrado(s)"))
+    if n_pular:  print(cinza(f"   {n_pular} rejeição(ões) com motivo"))
+    if n_editar: print(cinza(f"   {n_editar} edição(ões) (preferência do editor)"))
+    print("Incorporar ao preferencias.md para as próximas revisões?")
 
     resp = input("[s/n] → ").strip().lower()
     if resp != "s":
         return
 
-    # Enriquece os achados com motivo se o usuário quiser adicionar agora
-    for i, a in enumerate(todos_pulados, 1):
-        trecho = (a.get("trecho_original") or "[global]")[:60]
-        motivo_existente = a.get("_motivo_rejeicao", "")
-        if motivo_existente:
-            print(cinza(f"\n{i}. «{trecho}» — motivo já registrado: {motivo_existente}"))
-        else:
-            print(f"\n{i}. [{a.get('camada')}] «{trecho}»")
-            print(cinza(f"   Sugestão: {(a.get('correcao') or '')[:60]}"))
-            motivo = input(cinza("   Motivo da rejeição (Enter pra pular): ")).strip()
-            if motivo:
-                a["_motivo_rejeicao"] = motivo
-
-    # Enriquece o campo "porque" com o motivo do usuário para a geração de regras
+    # Monta contexto rico para gerar_regras
     achados_para_regra = []
-    for a in todos_pulados:
-        enriquecido = dict(a)
-        motivo = a.get("_motivo_rejeicao", "")
-        if motivo:
-            enriquecido["porque"] = f"{a.get('porque', '')} | Editor rejeitou: {motivo}"
-        achados_para_regra.append(enriquecido)
+    for e in uteis:
+        a = {k: v for k, v in e.items() if not k.startswith("_")}
+        tipo   = e.get("_tipo_decisao", "pular")
+        motivo = e.get("_motivo", "")
+        orig   = e.get("_correcao_original", "")
+        versao = e.get("_versao_usuario", "")
+
+        if tipo == "editar" and orig and versao:
+            contexto = f"Editor PREFERIU «{versao}» em vez de «{orig}»"
+            if motivo:
+                contexto += f". Motivo: {motivo}"
+        else:
+            contexto = f"Editor REJEITOU. Motivo: {motivo}" if motivo else "Editor rejeitou sem motivo explícito"
+
+        a["porque"] = f"{e.get('porque', '')} | {contexto}"
+        achados_para_regra.append(a)
 
     from feedback import gerar_regras, carregar_regras_existentes, detectar_conflitos, acrescentar_preferencias
     from datetime import datetime
 
-    print(f"\n🧠 Destilando {len(achados_para_regra)} rejeição(ões) em regras...")
+    print(f"\n🧠 Destilando {len(achados_para_regra)} ensinamento(s) em regras...")
     novas = gerar_regras(achados_para_regra)
     if not novas:
         print("Não foi possível destilar regras.")
         return
 
     existentes = carregar_regras_existentes()
-    conflitos = detectar_conflitos(novas, existentes)
+    conflitos  = detectar_conflitos(novas, existentes)
     data = datetime.now().strftime("%Y-%m-%d")
     a_gravar = []
 
     for regra, conflito in zip(novas, conflitos):
         if conflito:
-            print(f"\n⚠️  Possível conflito: {conflito}")
+            print(f"\n⚠️  Possível conflito com regra existente: {conflito}")
             print(f"   Regra nova: {regra}")
             resp = input("   Adicionar mesmo assim? [s/n] → ").strip().lower()
             if resp != "s":
@@ -315,14 +345,15 @@ def main():
             print(f"❌ JSON não encontrado: {json_path}")
             sys.exit(1)
     else:
-        print("🔍 Rodando revisão completa (9 agentes em paralelo)...")
-        print("   Isso leva cerca de 1-2 minutos.\n")
+        print("🔍 Analisando o roteiro com 9 agentes em paralelo...")
+        print("   Aguarde, isso leva cerca de 1-2 minutos.\n")
         resultado = subprocess.run(
             [sys.executable, "revisar.py", "--gdocs", args.gdocs],
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
+            stdout=subprocess.DEVNULL
         )
         if resultado.returncode != 0:
-            print("❌ Erro na revisão. Verifique a saída acima.")
+            print("❌ Erro na revisão. Tente rodar revisar.py separadamente para ver o erro.")
             sys.exit(1)
         jsons = sorted(Path("relatorios").glob("revisao_*.json"))
         if not jsons:
@@ -335,16 +366,16 @@ def main():
     roteiros = json.loads(json_path.read_text(encoding="utf-8"))
     print(f"📋 {len(roteiros)} roteiro(s) encontrado(s).")
 
-    todos_pulados = []
+    todos_ensinamentos = []
     for i, roteiro in enumerate(roteiros):
-        _, pulados = revisar_roteiro(roteiro, args.gdocs)
-        todos_pulados.extend(pulados)
+        _, ensinamentos = revisar_roteiro(roteiro, args.gdocs)
+        todos_ensinamentos.extend(ensinamentos)
         if i + 1 < len(roteiros):
             resp = input(f"\n▶ Próximo roteiro ({i + 2}/{len(roteiros)})? [s/n] → ").strip().lower()
             if resp != "s":
                 break
 
-    loop_aprendizado(todos_pulados)
+    loop_aprendizado(todos_ensinamentos)
     print("\n🎉 Revisão dinâmica concluída.")
 
 

@@ -35,8 +35,8 @@ SCHEMA_ACHADOS = {
                     "severidade":      {"type": "string", "enum": ["erro", "aviso", "sugestao"]},
                     "natureza":        {"type": "string", "enum": ["objetivo", "subjetivo"]},
                     "confianca":       {"type": "integer", "minimum": 0, "maximum": 100},
-                    "trecho_original": {"type": "string", "description": "Citação LITERAL do roteiro. Vazio se for um achado global (ex.: 'falta CTA')."},
-                    "correcao":        {"type": "string", "description": "Texto exato que substitui o trecho. Se trecho_original vazio, é o texto a adicionar."},
+                    "trecho_original": {"type": "string", "description": "Citação LITERAL do roteiro. Vazio se for um achado global (ex.: beat ausente, falta CTA)."},
+                    "correcao":        {"type": "string", "description": "Texto concreto que entra no lugar do trecho (substituição direta) ou texto a adicionar (se trecho_original vazio). NUNCA repita o trecho_original aqui — se não tiver substituição concreta, deixe trecho_original vazio e use este campo para o texto novo a inserir. Instruções meta ('reordenar', 'introduzir antes de X') vão no campo porque, não aqui."},
                     "porque":          {"type": "string", "description": "Justificativa em 1 frase."},
                 },
                 "required": ["severidade", "natureza", "confianca", "trecho_original", "correcao", "porque"],
@@ -60,6 +60,19 @@ def carregar_preferencias() -> str:
     if PREFERENCIAS_PATH.exists():
         return PREFERENCIAS_PATH.read_text(encoding="utf-8").strip()
     return ""
+
+
+# ─── Utilitários ─────────────────────────────────────────────────────────────
+
+def _sem_travessao(texto: str) -> str:
+    """Substitui travessão (—) por vírgula ou hífen conforme o contexto."""
+    if not texto:
+        return texto
+    # " — " entre palavras → ", "
+    texto = texto.replace(" — ", ", ")
+    # Travessão restante (início de frase, colado) → "-"
+    texto = texto.replace("—", "-")
+    return texto
 
 
 # ─── Classe base ─────────────────────────────────────────────────────────────
@@ -140,9 +153,22 @@ class AgenteBase:
             None,
             lambda: self._chamar_api_estruturada(system_prompt, user_prompt, schema),
         )
+        achados_validos = []
         for achado in resultado.get("achados", []):
             achado["camada"] = self.CAMADA
             self._limitar_severidade(achado)
+            # Limpa travessões dos campos gerados (não no trecho_original, que é citação literal)
+            for campo in ("correcao", "porque", "resumo"):
+                if campo in achado:
+                    achado[campo] = _sem_travessao(achado[campo])
+            trecho = (achado.get("trecho_original") or "").strip()
+            correcao = (achado.get("correcao") or "").strip()
+            if trecho and trecho == correcao:
+                continue  # antes == depois: achado inválido, descarta
+            achados_validos.append(achado)
+        resultado["achados"] = achados_validos
+        if "resumo" in resultado:
+            resultado["resumo"] = _sem_travessao(resultado["resumo"])
         return resultado
 
     def _limitar_severidade(self, achado: dict):

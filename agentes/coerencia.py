@@ -126,9 +126,12 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
   para deixar claro qual coesão quebra.
 - `trecho_original`: a citação LITERAL onde o gap aparece (ex.: a linha que cita algo não
   introduzido, ou o clímax sem preparo). Vazio se for um beat AUSENTE no roteiro todo.
-- `correcao`: o que inserir/reordenar para fechar o gap (concreto, no tom do autor) — ex.:
-  "Introduzir o CUDA antes da linha X" ou "Quantificar a adversidade: trocar 'era pequeno'
-  por um número concreto".
+- `correcao`: texto concreto pronto para entrar no roteiro — nunca uma instrução meta.
+  · Se é substituição: o trecho reescrito (ex.: "Mesmo assim, a receita chegou a 8,27 bi.").
+  · Se é adição (beat ausente): o texto novo a inserir (ex.: "Todos chamaram Jensen de louco.").
+  · Se não tem substituição concreta possível: deixe `trecho_original` vazio e use `correcao`
+    para o texto a adicionar. A justificativa e o onde inserir vão no campo `porque`.
+  · NUNCA copie o trecho_original no campo correcao — achado com antes=depois é inválido.
 - `severidade`/`natureza`:
     · [Entendimento] que IMPEDE o espectador de entender (referência sem introdução, salto
       causal que perde o leitor, 2+ blocos sem conexão lógica) = "erro" + "objetivo".
