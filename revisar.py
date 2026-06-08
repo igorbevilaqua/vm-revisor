@@ -343,7 +343,7 @@ def _payload_json(resultados: list[dict]) -> list[dict]:
 
 # ─── Menu de entrada ─────────────────────────────────────────────────────────
 
-def mostrar_menu_modo(roteiros: list, url_gdocs: str | None) -> str:
+def mostrar_menu_modo(roteiros, url_gdocs):
     """Mostra sumário do documento carregado e pergunta o tipo de revisão.
     Retorna 'relatorio', 'dinamica' ou 'tabela'."""
     print()
@@ -358,7 +358,7 @@ def mostrar_menu_modo(roteiros: list, url_gdocs: str | None) -> str:
     print()
     print("   [1] Relatório       — relatório em lista no Google Docs")
     print("   [2] Dinâmica        — parágrafo a parágrafo, 1 roteiro por vez")
-    print("   [3] Tabela Interativa — (em breve)")
+    print("   [3] Tabela Interativa — interface visual no browser")
     print()
     while True:
         resp = input("  → ").strip()
@@ -463,6 +463,77 @@ async def modo_dinamica(roteiros, pdfs, args, url_gdocs):
     print("\n🎉 Revisão dinâmica concluída.")
 
 
+# ─── Modo Tabela Interativa ──────────────────────────────────────────────────
+
+async def modo_tabela(roteiros, pdfs, args, url_gdocs):
+    """9 agentes → tabela no browser → próximo roteiro (1 por vez como Dinâmica)."""
+    import json as _json
+
+    try:
+        import flask  # noqa — verifica disponibilidade
+    except ImportError:
+        print("\n❌ Flask não instalado. Execute:\n   pip install flask")
+        print("   Depois rode novamente e escolha [3] Tabela Interativa.")
+        return
+
+    from tabela_interativa import transformar_roteiro, TabelaServer
+
+    pasta_relatorios = Path(__file__).parent / "relatorios"
+    pasta_relatorios.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    arquivo_json = pasta_relatorios / f"revisao_{timestamp}.json"
+
+    todos_resultados = []
+    server = TabelaServer(url_gdocs=url_gdocs or "", porta=_porta_livre())
+
+    for i, roteiro in enumerate(roteiros):
+        print(f"\n{'═'*62}")
+        print(f"  [{i+1}/{len(roteiros)}] Analisando: {roteiro['titulo'][:50]}")
+        print(f"  Rodando 9 agentes em paralelo...")
+        print(f"{'═'*62}")
+
+        cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
+        resultado = await processar_roteiro(roteiro, pdfs, verbose=True, cliente=cliente,
+                                            verificar_web=args.verificar_web)
+        todos_resultados.append(resultado)
+
+        arquivo_json.write_text(
+            _json.dumps(_payload_json(todos_resultados), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        meta = {
+            "total": len(roteiros),
+            "atual": i + 1,
+            "proximo_titulo": roteiros[i + 1]["titulo"] if i + 1 < len(roteiros) else None,
+        }
+        dados = transformar_roteiro(
+            _payload_json([resultado])[0],
+            url_gdocs=url_gdocs or "",
+            meta=meta,
+        )
+
+        if i == 0:
+            server.iniciar(dados)
+        else:
+            server.avancar(dados)
+
+        server.esperar_decisao()
+
+    server.finalizar()
+    print(f"\n🧩 JSON salvo: {arquivo_json}")
+    print("\n🎉 Tabela Interativa concluída.")
+
+
+def _porta_livre(inicio: int = 7432) -> int:
+    import socket
+    for p in range(inicio, inicio + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", p)) != 0:
+                return p
+    return inicio
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 async def main():
@@ -475,7 +546,7 @@ async def main():
     parser.add_argument("--cliente",   "-c", help="Nome do cliente/criador que vai performar (aparece no comando). Se omitido, tenta detectar no documento.")
     parser.add_argument("--verificar-web", action="store_true", help="Fact-check confere as afirmações com busca real na web (mais lento e com custo).")
     parser.add_argument("--silencioso","-s", action="store_true", help="Menos output no terminal")
-    parser.add_argument("--modo",      "-m", choices=["relatorio", "dinamica"],
+    parser.add_argument("--modo",      "-m", choices=["relatorio", "dinamica", "tabela"],
                         help="Pula o menu e vai direto para o modo especificado.")
     args = parser.parse_args()
 
@@ -515,7 +586,7 @@ async def main():
         await modo_dinamica(roteiros, pdfs, args, args.gdocs)
 
     elif modo == "tabela":
-        print("\n⏳ Tabela Interativa ainda não está disponível. Escolha outro modo.")
+        await modo_tabela(roteiros, pdfs, args, args.gdocs)
 
 
 if __name__ == "__main__":
