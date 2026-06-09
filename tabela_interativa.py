@@ -209,8 +209,9 @@ class TabelaServer:
                 return jsonify({"aplicadas": 0})
             try:
                 from revisar_dinamico import aplicar_correcoes
-                n = aplicar_correcoes(url, correcoes)
-                return jsonify({"aplicadas": n})
+                # interativo=False: roda em thread Flask — nunca pode chamar input()
+                res = aplicar_correcoes(url, correcoes, interativo=False)
+                return jsonify({"aplicadas": res["aplicadas"], "avisos": res.get("avisos", [])})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
@@ -880,7 +881,11 @@ async function gravar(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({url_gdocs:D.url_gdocs||'',correcoes:aprovadas})});
     const d=await r.json();
-    if(r.ok)toast(`✓ ${d.aplicadas} substituição(ões) gravada(s) no Google Docs`,'s');
+    if(r.ok){
+      let msg=`✓ ${d.aplicadas} substituição(ões) gravada(s) no Google Docs`;
+      if(d.avisos&&d.avisos.length)msg+=` · ⚠ ${d.avisos.join(' · ')}`;
+      toast(msg,'s');
+    }
     else toast(d.error||'Erro ao gravar','e');
   }catch(e){toast('Erro de conexão com o servidor local','e')}
   finally{

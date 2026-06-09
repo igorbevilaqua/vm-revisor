@@ -129,7 +129,12 @@ def _e_substituicao_direta(trecho: str, correcao: str) -> bool:
 def contar_ocorrencias(texto_doc, trecho):
     return texto_doc.count(trecho)
 
-def aplicar_correcoes(url, correcoes):
+def aplicar_correcoes(url, correcoes, interativo=True):
+    """Aplica as correções no Google Doc. Retorna dict {"aplicadas": n, "avisos": [...]}.
+
+    interativo=True  → pergunta no terminal antes de trocar trechos com múltiplas ocorrências.
+    interativo=False → nunca chama input() (uso em handler HTTP); devolve os avisos no dict.
+    """
     from google_docs import extrair_doc_id, autenticar, ler_documento
     from googleapiclient.discovery import build
 
@@ -166,7 +171,7 @@ def aplicar_correcoes(url, correcoes):
 
         n = contar_ocorrencias(texto_doc, trecho)
         if n > 1:
-            avisos.append(f"  ⚠️  «{trecho[:50]}» aparece {n}x no doc: todas serão trocadas")
+            avisos.append(f"«{trecho[:50]}» aparece {n}x no doc: todas serão trocadas")
         requests.append({
             "replaceAllText": {
                 "containsText": {"text": trecho, "matchCase": True},
@@ -178,21 +183,25 @@ def aplicar_correcoes(url, correcoes):
         for msg in ignorados:
             print(cinza(f"   • {msg}"))
 
-    if avisos:
-        print("\n" + "\n".join(avisos))
+    if avisos and interativo:
+        print("\n" + "\n".join(f"  ⚠️  {a}" for a in avisos))
         resp = input("Continuar mesmo assim? [s/n] → ").strip().lower()
         if resp != "s":
-            return 0
+            return {"aplicadas": 0, "avisos": avisos}
+
+    if not requests:
+        return {"aplicadas": 0, "avisos": avisos}
 
     result = docs.documents().batchUpdate(
         documentId=doc_id,
         body={"requests": requests}
     ).execute()
 
-    return sum(
+    aplicadas = sum(
         r.get("replaceAllText", {}).get("occurrencesChanged", 0)
         for r in result.get("replies", [])
     )
+    return {"aplicadas": aplicadas, "avisos": avisos}
 
 # ─── Loop interativo por roteiro ─────────────────────────────────────────────
 
@@ -374,7 +383,7 @@ def revisar_roteiro(roteiro, url):
         resp = input(f"\nGravar no Google Doc original? [s/n] → ").strip().lower()
         if resp == "s":
             print("Aplicando...")
-            n = aplicar_correcoes(url, correcoes_aprovadas)
+            n = aplicar_correcoes(url, correcoes_aprovadas)["aplicadas"]
             print(verde(f"✅ {n} substituição(ões) aplicada(s) no doc."))
             print(cinza("   (Arquivo → Histórico de versões para reverter, se precisar)"))
     else:
