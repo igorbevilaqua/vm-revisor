@@ -194,13 +194,14 @@ class TabelaServer:
                              "Reinicie com: python3 revisar.py --gdocs \"URL\""
                 }), 400
             correcoes_req = data.get("correcoes", [])
+            # "aplicado" é sentinel de "aprovado sem substituição" — não escrever no doc
             correcoes = [
                 (c["trecho_original"], c["decisao"])
                 for c in correcoes_req
-                if c.get("trecho_original") and c.get("decisao")
+                if c.get("trecho_original") and c.get("decisao") and c["decisao"] != "aplicado"
             ]
             if not correcoes:
-                return jsonify({"error": "Nenhuma correção aprovada"}), 400
+                return jsonify({"aplicadas": 0})
             try:
                 from revisar_dinamico import aplicar_correcoes
                 n = aplicar_correcoes(url, correcoes)
