@@ -151,6 +151,7 @@ class TabelaServer:
     """
 
     def __init__(self, url_gdocs: str = "", porta: int = 7432):
+        import time as _time
         self.url_gdocs = url_gdocs
         self.porta = porta
         self.dados_atual: dict = {}
@@ -158,6 +159,9 @@ class TabelaServer:
         self._next_event = threading.Event()
         self._app = None
         self._thread = None
+        # ID único por processo — impede que o localStorage de uma sessão anterior
+        # contamine a sessão atual quando roteiros têm o mesmo id sequencial (rot_01...).
+        self.sessao_id = str(int(_time.time()))
 
     # ── Setup Flask ────────────────────────────────────────────────────────
     def _criar_app(self):
@@ -177,7 +181,7 @@ class TabelaServer:
             html = _HTML.replace(
                 "__DADOS_JSON__",
                 json.dumps(server.dados_atual, ensure_ascii=False)
-            )
+            ).replace("__SESSAO_ID__", server.sessao_id)
             return Response(html, mimetype="text/html; charset=utf-8")
 
         @app.route("/api/dados")
@@ -579,6 +583,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 <script>
 // ── Dados iniciais (embedded no primeiro load) ───────────────────────────────
 let D = __DADOS_JSON__;
+const SESSAO = '__SESSAO_ID__';
 let filtro = 'todos';
 let numFiltroBtn = null;
 
@@ -587,12 +592,12 @@ function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 function $id(id){return document.getElementById(id)}
 
 function salvar(){
-  const k=`vml_${D.roteiro.id}`;
+  const k=`vml_${SESSAO}_${D.roteiro.id}`;
   const m={};D.correcoes.forEach(c=>{m[c.id]=c.decisao});
   localStorage.setItem(k,JSON.stringify(m));
 }
 function carregar(){
-  const k=`vml_${D.roteiro.id}`;
+  const k=`vml_${SESSAO}_${D.roteiro.id}`;
   const s=localStorage.getItem(k);
   if(!s)return;
   const m=JSON.parse(s);
@@ -879,7 +884,7 @@ async function continuar(){
       // Busca novos dados e re-renderiza
       const r2=await fetch('/api/dados');
       D=await r2.json();
-      localStorage.removeItem(`vml_${D.roteiro.id}`);
+      localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
       carregar();
       renderTudo();
       window.scrollTo(0,0);
@@ -897,7 +902,7 @@ async function continuar(){
 function resetar(){
   if(!confirm('Resetar todas as decisões?'))return;
   D.correcoes.forEach(c=>c.decisao=null);
-  localStorage.removeItem(`vml_${D.roteiro.id}`);
+  localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
   renderTudo();
 }
 
