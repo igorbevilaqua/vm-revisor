@@ -485,16 +485,34 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
 
     todos_resultados = []
     server = TabelaServer(url_gdocs=url_gdocs or "", porta=_porta_livre())
+    loop = asyncio.get_event_loop()
+    next_task = None  # análise do próximo roteiro rodando em background
 
     for i, roteiro in enumerate(roteiros):
-        print(f"\n{'═'*62}")
-        print(f"  [{i+1}/{len(roteiros)}] Analisando: {roteiro['titulo'][:50]}")
-        print(f"  Rodando 9 agentes em paralelo...")
-        print(f"{'═'*62}")
+        if next_task is not None:
+            # resultado já calculado em background — só aguarda a conclusão (geralmente instantâneo)
+            print(f"\n{'═'*62}")
+            print(f"  [{i+1}/{len(roteiros)}] Carregando: {roteiro['titulo'][:50]}")
+            print(f"  (análise em background — sem espera...)")
+            print(f"{'═'*62}")
+            try:
+                resultado = await next_task
+            except Exception as e:
+                print(f"  ⚠️  Prefetch falhou ({e}), recalculando...")
+                cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
+                resultado = await processar_roteiro(roteiro, pdfs, verbose=True,
+                                                    cliente=cliente,
+                                                    verificar_web=args.verificar_web)
+            next_task = None
+        else:
+            print(f"\n{'═'*62}")
+            print(f"  [{i+1}/{len(roteiros)}] Analisando: {roteiro['titulo'][:50]}")
+            print(f"  Rodando 9 agentes em paralelo...")
+            print(f"{'═'*62}")
+            cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
+            resultado = await processar_roteiro(roteiro, pdfs, verbose=True, cliente=cliente,
+                                                verificar_web=args.verificar_web)
 
-        cliente = args.cliente or roteiro.get("cliente") or detectar_cliente(roteiro["texto"])
-        resultado = await processar_roteiro(roteiro, pdfs, verbose=True, cliente=cliente,
-                                            verificar_web=args.verificar_web)
         todos_resultados.append(resultado)
 
         arquivo_json.write_text(
@@ -518,7 +536,19 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
         else:
             server.avancar(dados)
 
-        server.esperar_decisao()
+        # Dispara a análise do próximo roteiro em background enquanto o usuário revisa este
+        if i + 1 < len(roteiros):
+            proximo = roteiros[i + 1]
+            proximo_cliente = args.cliente or proximo.get("cliente") or detectar_cliente(proximo["texto"])
+            print(f"   ⚡ Pré-analisando próximo roteiro em background...")
+            next_task = asyncio.create_task(
+                processar_roteiro(proximo, pdfs, verbose=False,
+                                  cliente=proximo_cliente,
+                                  verificar_web=args.verificar_web)
+            )
+
+        # run_in_executor libera o event loop para rodar next_task enquanto aguarda o usuário
+        await loop.run_in_executor(None, server.esperar_decisao)
 
     server.finalizar()
     print(f"\n🧩 JSON salvo: {arquivo_json}")

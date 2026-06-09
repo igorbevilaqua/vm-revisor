@@ -60,6 +60,43 @@ Toda tensão, pergunta em aberto, promessa ("vou te mostrar...") ou elemento pla
 PRECISA ter resolução. Setup sem payoff frustra; payoff sem setup confunde."""
 
 
+# Regra de continuidade temporal em narrativas biográficas (dimensão ENTENDIMENTO).
+REGRA_LACUNA_TEMPORAL = """## LACUNA_TEMPORAL_BIOGRAFICA (regra de ENTENDIMENTO)
+
+Em roteiros biográficos, o escritor costuma usar dois sistemas de referência temporal:
+  • Sistema de IDADE: "aos sete anos", "com 25 anos", "aos dezoito", etc.
+  • Sistema de ANO: "em 1958", "em 1999", "no ano de 2003", etc.
+
+Quando os dois sistemas coexistem no mesmo roteiro mas NUNCA aparecem juntos numa mesma
+frase, o espectador perde a progressão da história: não consegue calcular quanto tempo
+passou entre eventos, não sente o peso acumulado da trajetória e a emoção enfraquece.
+
+COMO DETECTAR:
+1. Verifique se o roteiro contém ao menos uma referência de IDADE e ao menos uma de ANO.
+2. Verifique se existe alguma frase que COMBINE os dois sistemas (ex.: "Em 1958, aos 32
+   anos, ..."; "Com 47 anos, em 1973, ..."). Uma única frase desse tipo já fecha a lacuna.
+3. Se a combinação NÃO existe em nenhuma frase, SINALIZE.
+
+O que reportar:
+- `trecho_original`: o primeiro marco de ANO que aparece após uma sequência de marcos de
+  IDADE (ou vice-versa) — esse é o ponto de ancoragem ideal para inserir a ponte.
+- `correcao`: a frase reescrita com a informação de conexão acrescentada. Se não for
+  possível calcular a idade com certeza, use a forma: "Em 1958, [acrescente a idade de
+  [NOME] neste momento], vendeu o único imóvel..."
+- `porque`: comece com "[Entendimento] ". Explique que o roteiro usa idade SEM ano e ano
+  SEM idade em frases separadas, indique o par desconectado (ex.: "aos sete anos" + "em
+  1958") e diga que o espectador não consegue calcular a progressão temporal.
+
+NÃO SINALIZAR quando:
+- O roteiro usa apenas um dos dois sistemas (só idades ou só anos) — não há conflito.
+- O roteiro biográfico tem pelo menos UMA frase que menciona os dois juntos.
+- O roteiro NÃO é biográfico (produto, empresa, conceito abstrato sem linha do tempo de
+  uma pessoa física).
+
+CLASSIFICAÇÃO: [Entendimento], severidade "aviso" + natureza "objetivo" — quebrala
+progressão emocional mas não impede a compreensão do argumento central."""
+
+
 # Regra nomeada de coesão lógica entre frases consecutivas (dimensão ENTENDIMENTO).
 REGRA_COESAO_FRASES = """## COESÃO_ENTRE_FRASES (regra de ENTENDIMENTO)
 
@@ -106,6 +143,8 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
 
 {MECANISMOS_EMOCIONAIS}
 
+{REGRA_LACUNA_TEMPORAL}
+
 {REGRA_COESAO_FRASES}
 
 ## Procedimento (siga nesta ordem, mentalmente)
@@ -114,7 +153,9 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
    é introduzido pela primeira vez.
 3. ENTENDIMENTO — para cada referência, verifique: foi introduzida ANTES de ser usada?
    tem contexto suficiente? Há salto causal/temporal (um passo lógico pulado)? Referência
-   pendurada (pronome/“isso” sem antecedente claro)? Setup sem payoff? Ordem confusa?
+   pendurada (pronome/”isso” sem antecedente claro)? Setup sem payoff? Ordem confusa?
+   Aplique LACUNA_TEMPORAL_BIOGRAFICA: se o roteiro tem marcos de IDADE e marcos de ANO
+   mas nenhuma frase combina os dois, sinalize.
    Aplique também a regra COESÃO_ENTRE_FRASES: varra os pares de frases consecutivas e
    sinalize oposição de carga semântica sem conectivo adversativo (respeitando a exceção
    de SOMA/reforço).
@@ -173,11 +214,14 @@ class AgenteCoerencia(AgenteBase):
 {self._formatar_roteiro(roteiro)}
 
 Faça o inventário de entidades/premissas e verifique introdução antes do uso, contexto,
-saltos e setups sem payoff (entendimento). Varra também os pares de frases consecutivas
-aplicando a regra COESÃO_ENTRE_FRASES (oposição de carga sem conectivo adversativo; não
-sinalize quando a segunda frase apenas soma/reforça a primeira). Depois, dada a estrutura
-CODEX, verifique se os beats exigidos para a emoção disparar estão presentes e na ordem
-(sentimento). Marque cada achado com [Entendimento] ou [Sentimento] no campo 'porque'."""
+saltos e setups sem payoff (entendimento). Se for um roteiro biográfico, aplique a regra
+LACUNA_TEMPORAL_BIOGRAFICA: verifique se há marcos de IDADE ("aos X anos") e marcos de ANO
+("em XXXX") e se alguma frase os combina; se não, sinalize. Varra também os pares de frases
+consecutivas aplicando a regra COESÃO_ENTRE_FRASES (oposição de carga sem conectivo
+adversativo; não sinalize quando a segunda frase apenas soma/reforça a primeira). Depois,
+dada a estrutura CODEX, verifique se os beats exigidos para a emoção disparar estão
+presentes e na ordem (sentimento). Marque cada achado com [Entendimento] ou [Sentimento]
+no campo 'porque'."""
         resultado = await self._rodar(self.system_prompt, user_prompt)
         # [Sentimento] nunca bloqueia (fortalece a emoção, não elimina). Só [Entendimento].
         for a in resultado.get("achados", []):

@@ -35,12 +35,19 @@ exagerados a ponto de prejudicar a credibilidade.
 - Reporte um achado SOMENTE para afirmações com problema (incorretas, imprecisas,
   desatualizadas ou exageradas). Fato correto NÃO vira achado.
     - `trecho_original`: a citação LITERAL da afirmação problemática no roteiro.
-    - `correcao`: a versão corrigida da frase, com a informação correta.
-    - `porque`: qual é o erro e por que importa para a credibilidade.
+    - `correcao`: SEMPRE uma frase pronta para entrar no roteiro — nunca uma instrução meta.
+      · Se você SABE o dado correto: substitua o dado errado pelo correto na frase.
+        Ex.: trecho "fundada em 1923" → correcao "fundada em 1919"
+      · Se você NÃO tem certeza do valor exato: mantenha a frase intacta mas substitua o
+        dado suspeito por "[verificar: X]", onde X é o que precisa ser conferido.
+        Ex.: trecho "lucro de R$ 4 bilhões" → correcao "lucro de [verificar: valor exato]"
+      · NUNCA copie o trecho_original no campo correcao — antes=depois é inválido.
+    - `porque`: qual é o erro e por que importa para a credibilidade. Se usou
+      "[verificar: X]", explique por que o dado parece incorreto/impreciso.
     - `severidade`: "erro" para fato falso/incorreto; "aviso" para impreciso/desatualizado/exagerado.
     - `natureza`: SEMPRE "objetivo" — fato é fato.
-    - `confianca`: alta só quando você tem certeza. Se for algo que "parece certo mas
-      precisa confirmar", use confianca <= 60 e diga isso no `porque` (sinal de checagem manual).
+    - `confianca`: alta só quando você tem certeza do dado correto. Se usou "[verificar: X]",
+      use confianca <= 60 (sinal de checagem manual).
 - Não invente erro. Não trate opinião do autor como fato a verificar.
 - `nota` (0-10): confiabilidade factual geral. `resumo`: nº de afirmações checadas e nº de problemas."""
 
