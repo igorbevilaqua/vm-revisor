@@ -151,7 +151,7 @@ class TabelaServer:
     """
 
     def __init__(self, url_gdocs: str = "", porta: int = 7432):
-        import time as _time
+        import uuid as _uuid
         self.url_gdocs = url_gdocs
         self.porta = porta
         self.dados_atual: dict = {}
@@ -161,7 +161,8 @@ class TabelaServer:
         self._thread = None
         # ID único por processo — impede que o localStorage de uma sessão anterior
         # contamine a sessão atual quando roteiros têm o mesmo id sequencial (rot_01...).
-        self.sessao_id = str(int(_time.time()))
+        # uuid4 garante unicidade mesmo com múltiplas execuções no mesmo segundo.
+        self.sessao_id = _uuid.uuid4().hex
 
     # ── Setup Flask ────────────────────────────────────────────────────────
     def _criar_app(self):
@@ -335,7 +336,7 @@ _HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Tabela Interativa — VML</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#0D0F12;--surface:#141720;--surface-2:#1C2030;--surface-3:#242840;
@@ -348,7 +349,7 @@ _HTML = r"""<!DOCTYPE html>
   --text:#E8ECF5;--text-2:#9BA3BB;--text-3:#5C6480;
   --antes:rgba(255,69,69,.12);--antes-text:#FF8080;
   --depois:rgba(0,201,127,.12);--depois-text:#4FFFB0;
-  --mono:'IBM Plex Mono',monospace;--sans:'Inter',sans-serif;
+  --mono:'IBM Plex Mono',monospace;--sans:'Plus Jakarta Sans',sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;
@@ -360,7 +361,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 /* ── Topbar ─── */
 #topbar{position:sticky;top:0;z-index:100;background:var(--surface);
   border-bottom:1px solid var(--border);padding:0 24px;height:52px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px}
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  box-shadow:0 2px 20px rgba(0,0,0,.45)}
 .topbar-left{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px}
 .topbar-brand{color:var(--text-3);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
 .topbar-sep{color:var(--border-light)}
@@ -404,7 +406,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .tabela th:first-child{text-align:center}
 .col-n{width:40px}.col-t{width:108px}.col-tr{width:170px}
 .col-a{width:195px}.col-d{width:195px}.col-j{width:185px}.col-ac{width:118px}
-.tabela td{border:1px solid var(--border);padding:9px 10px;vertical-align:top;transition:background .2s}
+.tabela td{border:1px solid var(--border);padding:9px 10px;vertical-align:top;transition:background .15s,box-shadow .15s}
 
 /* Row types */
 .rb{background:var(--bloqueante-bg);border-left:3px solid var(--bloqueante)!important}
@@ -412,9 +414,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .rs{border-left:3px solid var(--sugestao)!important}
 .rl{background:var(--leitura-bg);border-left:3px solid var(--leitura-border)!important}
 .sec-row{background:var(--surface-2)}
-.sec-row td{border-top:1px solid var(--border)!important;padding:7px 12px;
-  font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text-3);
-  text-transform:uppercase;letter-spacing:.06em}
+.sec-row td{border-top:2px solid var(--border-light)!important;padding:10px 14px;
+  font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text-2);
+  text-transform:uppercase;letter-spacing:.1em;
+  background:linear-gradient(to right,var(--surface-3),var(--surface-2))!important}
 .row-aprov{background:var(--aprovado-bg)!important}
 .row-pulada{opacity:.4}
 .row-hidden{display:none}
@@ -510,10 +513,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 /* Toast */
 #toast{position:fixed;top:66px;right:24px;z-index:200;padding:10px 18px;border-radius:6px;
   font-family:var(--mono);font-size:12px;font-weight:600;opacity:0;
-  transition:opacity .3s;pointer-events:none}
+  transform:translateX(10px);
+  transition:opacity .22s,transform .3s cubic-bezier(.34,1.56,.64,1);pointer-events:none}
 #toast.ts{background:var(--aprovado-bg);border:1px solid rgba(0,201,127,.3);color:var(--aprovado)}
 #toast.te{background:var(--bloqueante-bg);border:1px solid var(--bloqueante-border);color:var(--bloqueante)}
-#toast.show{opacity:1}
+#toast.show{opacity:1;transform:translateX(0)}
 
 /* Loading overlay */
 #loading{display:none;position:fixed;inset:0;z-index:300;background:rgba(13,15,18,.85);
@@ -523,6 +527,21 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
   border-top-color:var(--sugestao);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading-msg{font-family:var(--mono);font-size:13px;color:var(--text-2)}
+
+/* ── Hover & microinterações ─── */
+.tabela tbody tr.rb:hover td{background:rgba(255,69,69,.13)!important}
+.tabela tbody tr.ra:hover td{background:rgba(245,166,35,.13)!important}
+.tabela tbody tr.rs:hover td{background:rgba(75,158,255,.05)!important}
+.tabela tbody tr.rl:hover td{background:rgba(136,145,170,.10)!important}
+.btn-ac:active{transform:scale(0.95);transition:transform .08s}
+.btn-gravar:active,.btn-continuar:active,.btn-sec:active{transform:scale(0.97);transition:transform .08s}
+
+/* ── Animação de aprovação ─── */
+@keyframes approvalFlash{
+  0%{box-shadow:inset 0 0 0 100px rgba(0,201,127,.18)}
+  100%{box-shadow:inset 0 0 0 100px rgba(0,0,0,0)}
+}
+.row-aprov td{animation:approvalFlash .55s ease-out}
 </style>
 </head>
 <body>

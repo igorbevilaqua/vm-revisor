@@ -133,6 +133,21 @@ class AgenteBase:
         self.client = anthropic.Anthropic()
         self.preferencias = carregar_preferencias()
 
+    # ── Data atual injetada em todo system prompt (âncora para fact-check) ──────
+    def _bloco_data_atual(self) -> str:
+        from datetime import date
+        hoje = date.today()
+        meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+                 "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+        return (
+            f"\n## DATA ATUAL\n"
+            f"Hoje é {hoje.day} de {meses[hoje.month - 1]} de {hoje.year}. "
+            f"Use esta data como referência para fact-check e avaliação de atualidade "
+            f"dos dados. Sua base de treinamento pode estar desatualizada — sinalize "
+            f"com confiança baixa (≤60%) qualquer afirmação que possa ter mudado "
+            f"recentemente, em vez de corrigi-la com base em dados do seu treinamento.\n"
+        )
+
     # ── Bloco de preferências injetado em todo system prompt ──────────────────
     def _bloco_preferencias(self) -> str:
         if not self.preferencias:
@@ -183,7 +198,7 @@ class AgenteBase:
             max_tokens=self.MAX_TOKENS,
             system=[{
                 "type": "text",
-                "text": system_prompt + self._bloco_preferencias() + self._bloco_calibracao(),
+                "text": system_prompt + self._bloco_data_atual() + self._bloco_preferencias() + self._bloco_calibracao(),
                 "cache_control": {"type": "ephemeral"},  # cacheia tools+system (5 min)
             }],
             tools=[{
@@ -206,7 +221,7 @@ class AgenteBase:
             max_tokens=self.MAX_TOKENS,
             system=[{
                 "type": "text",
-                "text": system_prompt + self._bloco_preferencias(),
+                "text": system_prompt + self._bloco_data_atual() + self._bloco_preferencias(),
                 "cache_control": {"type": "ephemeral"},  # cacheia tools+system (5 min)
             }],
             messages=[{"role": "user", "content": user_prompt}],
