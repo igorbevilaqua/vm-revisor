@@ -129,7 +129,9 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
     agentes = {
         "ortografia":   AgenteOrtografia(),
         "clareza":      AgenteClareza(),
-        "coerencia":    AgenteCoerencia(pdfs.get("storytelling", "")),
+        # Coerência usa só o destilado MECANISMOS_EMOCIONAIS (interno ao agente) —
+        # a íntegra do playbook (~14k tokens) fica com o storytelling, que é quem julga.
+        "coerencia":    AgenteCoerencia(""),
         "checklist":    AgenteChecklist(pdfs.get("checklist", "")),
         "storytelling": AgenteStorytelling(pdfs.get("storytelling", "")),
         "factcheck":    AgenteFactCheck(verificar_web=verificar_web),

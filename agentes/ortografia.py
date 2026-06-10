@@ -35,7 +35,8 @@ A `nota` (0-10) reflete a correção linguística geral do texto."""
 class AgenteOrtografia(AgenteBase):
 
     CAMADA = "ortografia"
-    MODELO = "claude-haiku-4-5"  # camada mecânica (regra-based) — Haiku resolve a custo bem menor
+    MODELO = "claude-sonnet-4-5"  # camada ELIMINADORA: falso erro (ex.: crase do Haiku
+                                  # com confiança 90) reprova roteiro bom — precisão > custo
 
     def __init__(self, conteudo_pdf: str = ""):
         super().__init__()

@@ -207,4 +207,8 @@ que o espectador consiga ACOMPANHAR. (O despertar de emoção é a [7].)
 
 <!-- O sistema (feedback.py) acrescenta aqui as regras derivadas dos achados que você rejeitou,
      no formato: - [YYYY-MM-DD] texto da regra.
+     Opcional: uma tag de camada logo após a data restringe a regra àquele agente —
+     ex.: - [YYYY-MM-DD] [ortografia] texto da regra. Sem tag, a regra vale para todos.
+     Tags válidas: ortografia, clareza, coerencia, checklist, storytelling, factcheck,
+     hook, cta, viral.
      Você pode editar ou apagar qualquer item. Esta é a ÚNICA seção escrita por código. -->

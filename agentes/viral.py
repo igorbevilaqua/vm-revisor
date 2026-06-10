@@ -44,6 +44,7 @@ Controvérsia calibrada · Utilidade prática · Timing.
 class AgenteViral(AgenteBase):
 
     CAMADA = "viral"
+    MODELO = "claude-haiku-4-5"  # só nota + sugestões subjetivas que nunca bloqueiam
     SEVERIDADE_MAX = "aviso"  # potencial viral é otimização, não eliminador
 
     def __init__(self, conteudo_pdf: str = ""):

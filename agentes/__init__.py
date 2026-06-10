@@ -11,6 +11,7 @@ O formato é forçado pela API via "tool use" (a resposta tem que casar com o sc
 """
 
 import os
+import re
 import asyncio
 from pathlib import Path
 
@@ -72,6 +73,17 @@ def carregar_preferencias() -> str:
     if PREFERENCIAS_PATH.exists():
         return PREFERENCIAS_PATH.read_text(encoding="utf-8").strip()
     return ""
+
+
+# Seção do preferencias.md escrita pelo feedback.py (regras aprendidas com rejeições).
+MARCADOR_APRENDIDO = "## [10] APRENDIDO COM REJEIÇÕES"
+
+# Tags de camada reconhecidas nas regras da seção [10]. Convenção:
+#   - [YYYY-MM-DD] [ortografia] regra...   → só o agente de ortografia recebe
+#   - [YYYY-MM-DD] regra...                → geral, todos recebem
+_CAMADAS_TAG = {"ortografia", "clareza", "coerencia", "checklist", "storytelling",
+                "factcheck", "hook", "cta", "viral"}
+_RE_TAG_CAMADA = re.compile(r"^-\s*\[\d{4}-\d{2}-\d{2}\]\s*\[([a-zA-Z]+)\]")
 
 
 # ─── Utilitários ─────────────────────────────────────────────────────────────
@@ -149,6 +161,22 @@ class AgenteBase:
         )
 
     # ── Bloco de preferências injetado em todo system prompt ──────────────────
+    def _preferencias_filtradas(self) -> str:
+        """Seções [1]-[9] entram inteiras (regras gerais da casa). Na seção [10],
+        regras com tag de OUTRA camada são filtradas — só entram as da própria
+        camada (self.CAMADA) e as sem tag (gerais). Economiza tokens por chamada."""
+        texto = self.preferencias
+        if MARCADOR_APRENDIDO not in texto:
+            return texto
+        cabeca, secao10 = texto.split(MARCADOR_APRENDIDO, 1)
+        linhas = []
+        for linha in secao10.splitlines():
+            m = _RE_TAG_CAMADA.match(linha.strip())
+            if m and m.group(1).lower() in _CAMADAS_TAG and m.group(1).lower() != self.CAMADA:
+                continue  # regra de outra camada — não gasta tokens aqui
+            linhas.append(linha)
+        return cabeca + MARCADOR_APRENDIDO + "\n".join(linhas)
+
     def _bloco_preferencias(self) -> str:
         if not self.preferencias:
             return ""
@@ -157,7 +185,7 @@ class AgenteBase:
             "As regras abaixo foram definidas pelo editor humano e têm prioridade sobre\n"
             "qualquer recomendação genérica. NÃO sugira nada que as contrarie. Se um achado\n"
             "seu seria rejeitado por essas regras, não o inclua.\n\n"
-            f"{self.preferencias}\n"
+            f"{self._preferencias_filtradas()}\n"
         )
 
     # ── Bloco de calibração injetado em todo system prompt estruturado ────────

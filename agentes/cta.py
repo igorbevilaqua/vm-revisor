@@ -48,14 +48,16 @@ def bloco_cliente(cliente: str = "") -> str:
     )
 
 
-def montar_system(complemento: str, cliente: str = "") -> str:
+def montar_system(complemento: str) -> str:
+    # O bloco do cliente NÃO entra aqui de propósito: system idêntico entre clientes
+    # mantém o prompt cache estável (o cliente vai no user prompt, em analisar()).
     return f"""Você é o Agente de CTA (Comando) da Viral Media Labs (VML).
 
 Sua função é avaliar o CTA do roteiro pela metodologia "CTA com Esteróides" e propor
 versões fortes, 100% adaptadas ao TEMA deste roteiro específico.
 
 {PLAYBOOK_CTA}
-{bloco_cliente(cliente)}{complemento}
+{complemento}
 
 ## Domínio exclusivo
 Você é a autoridade FINAL sobre o CTA. Foque APENAS nas últimas linhas do roteiro (o comando).
@@ -85,14 +87,15 @@ class AgenteCTA(AgenteBase):
 
     def __init__(self, conteudo_pdf: str = "", cliente: str = ""):
         super().__init__()
+        self.cliente = cliente
         complemento = ""
         if conteudo_pdf:
             complemento = f"\n\n## Playbook dos Comandos (íntegra):\n{conteudo_pdf}"
-        self.system_prompt = montar_system(complemento, cliente=cliente)
+        self.system_prompt = montar_system(complemento)
 
     async def analisar(self, roteiro: str) -> dict:
         user_prompt = f"""Avalie o CTA deste roteiro usando o Playbook dos Comandos da VML:
-
+{bloco_cliente(self.cliente)}
 {self._formatar_roteiro(roteiro)}
 
 Identifique o CTA atual (ou ausência) e registre UM achado com a sua melhor versão
