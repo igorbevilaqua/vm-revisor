@@ -20,6 +20,10 @@ from agentes import AgenteBase
 # Confiança mínima para um erro objetivo ser tratado como bloqueante.
 CONFIANCA_BLOQUEIO = 70
 
+# Camadas eliminadoras: se alguma delas FALHA (exceção no agente), a revisão está
+# incompleta e o roteiro NUNCA pode sair "APROVADO" — o veredicto vira provisório.
+CAMADAS_ELIMINADORAS = {"ortografia", "factcheck", "checklist", "coerencia"}
+
 # Ordem de severidade para ordenação (maior = mais urgente).
 PESO_SEVERIDADE = {"erro": 3, "aviso": 2, "sugestao": 1}
 
@@ -145,10 +149,14 @@ def _ordenar(achados: list[dict]) -> list[dict]:
     )
 
 
-def _veredicto(erros_bloqueantes: int, nota_geral: float) -> str:
+def _veredicto(erros_bloqueantes: int, nota_geral: float,
+               eliminadores_falhos: list = None) -> str:
     if erros_bloqueantes >= 3 or nota_geral < 5:
         return "REPROVADO"
     if erros_bloqueantes == 0 and nota_geral >= 8:
+        # Camada eliminadora falhou → revisão incompleta: nunca aprovar de vez.
+        if eliminadores_falhos:
+            return "APROVADO COM AJUSTES"
         return "APROVADO"
     return "APROVADO COM AJUSTES"
 
@@ -197,11 +205,19 @@ class AgenteConsolidador(AgenteBase):
         notas_para_media = [v for k, v in notas.items() if k != "viral"]
         nota_geral = round(sum(notas_para_media) / len(notas_para_media), 1) if notas_para_media else 0.0
 
-        veredicto = _veredicto(len(bloqueantes), nota_geral)
+        eliminadores_falhos = sorted(f for f in falhas if f in CAMADAS_ELIMINADORAS)
+        veredicto = _veredicto(len(bloqueantes), nota_geral, eliminadores_falhos)
 
         # ── Síntese executiva (única chamada à LLM, ancorada nos dados) ──────
         diagnostico = await self._sintetizar(titulo, veredicto, nota_geral, nota_viral,
                                               bloqueantes, otimizacoes, resumos)
+
+        if eliminadores_falhos:
+            nomes = ", ".join(NOMES_CAMADA.get(c, c) for c in eliminadores_falhos)
+            diagnostico = (
+                f"⚠️ Camada {nomes} falhou — revisão incompleta, veredicto provisório.\n\n"
+                f"{diagnostico}"
+            )
 
         painel = []
         for camada in ORDEM_PAINEL:
