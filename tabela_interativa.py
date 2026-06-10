@@ -664,6 +664,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
   100%{box-shadow:inset 0 0 0 100px rgba(0,0,0,0)}
 }
 .row-aprov td{animation:approvalFlash .55s ease-out}
+
+/* ── Foco de teclado (J/K) ─── */
+tr.row-focus{outline:2px solid var(--sugestao);outline-offset:-2px}
+tr.row-focus td{background:rgba(75,158,255,.06)}
+.kbd-legend{font-family:var(--mono);font-size:10px;color:var(--text-3);
+  margin-left:12px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -708,7 +714,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 </div>
 
 <div id="footer">
-  <div class="footer-l"><span class="naplic" id="n-ap">0</span> de <span id="n-tot">0</span> aplicadas</div>
+  <div class="footer-l"><span class="naplic" id="n-ap">0</span> de <span id="n-tot">0</span> aplicadas<span class="kbd-legend">J/K navegar · A aplicar · E editar · P pular</span></div>
   <div class="footer-c" id="footer-st">—</div>
   <div class="footer-r">
     <button class="btn-sec" onclick="resetar()">Resetar</button>
@@ -883,7 +889,44 @@ function renderTudo(){
   if(sug.length){addSec('💡  SUGESTÕES');sug.forEach(addRow)}
 
   atualizarFooter();
+  aplicarFoco();
 }
+
+// ── Atalhos de teclado (J/K navegar · A aplicar · E editar · P pular) ────────
+let focoId=null;
+function visIds(){
+  // só linhas de correção visíveis — ignora seções e contexto
+  return D.correcoes.filter(c=>{
+    if(c.tipo!=='correcao')return false;
+    const r=$id(`row-${c.id}`);
+    return r&&!r.classList.contains('row-hidden');
+  }).map(c=>c.id);
+}
+function aplicarFoco(){
+  document.querySelectorAll('tr.row-focus').forEach(r=>r.classList.remove('row-focus'));
+  if(!focoId)return;
+  const r=$id(`row-${focoId}`);
+  if(r&&!r.classList.contains('row-hidden')){
+    r.classList.add('row-focus');
+    r.scrollIntoView({block:'center',behavior:'smooth'});
+  }
+}
+function mover(d){
+  const ids=visIds();if(!ids.length)return;
+  let i=ids.indexOf(focoId);
+  i=i<0?(d>0?0:ids.length-1):Math.min(ids.length-1,Math.max(0,i+d));
+  focoId=ids[i];aplicarFoco();
+}
+document.addEventListener('keydown',e=>{
+  const tag=(e.target.tagName||'').toLowerCase();
+  if(tag==='textarea'||tag==='input'||e.metaKey||e.ctrlKey||e.altKey)return;
+  const k=e.key.toLowerCase();
+  if(k==='j'||e.key==='ArrowDown'){e.preventDefault();mover(1)}
+  else if(k==='k'||e.key==='ArrowUp'){e.preventDefault();mover(-1)}
+  else if(k==='a'&&focoId){e.preventDefault();aplicar(focoId)}
+  else if(k==='e'&&focoId){e.preventDefault();editar(focoId)}
+  else if(k==='p'&&focoId){e.preventDefault();pular(focoId)}
+});
 
 // ── Filtro ────────────────────────────────────────────────────────────────────
 function matchF(c){
@@ -948,7 +991,14 @@ function editar(id){
     <button class="btn-ac btn-cf" onclick="conf('${id}')">✓ Confirmar</button>
     <button class="btn-ac btn-ca" onclick="canc('${id}')">✕ Cancelar</button>
   </div>`;
-  const ta=$id(`ta-${id}`);if(ta){ta.focus();ta.select()}
+  const ta=$id(`ta-${id}`);
+  if(ta){
+    ta.focus();ta.select();
+    ta.addEventListener('keydown',ev=>{
+      if(ev.key==='Escape'){ev.preventDefault();canc(id)}
+      else if((ev.metaKey||ev.ctrlKey)&&ev.key==='Enter'){ev.preventDefault();conf(id)}
+    });
+  }
 }
 
 function conf(id){
