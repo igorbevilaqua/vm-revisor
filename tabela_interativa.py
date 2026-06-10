@@ -140,6 +140,63 @@ def json_mais_recente():
     return jsons[-1] if jsons else None
 
 
+def aplicar_decisoes_no_payload(payload, decisoes, motivos=None):
+    """Carimba as decisões acumuladas pelo server nos achados do payload (in-place).
+    Usado antes de regravar o JSON incremental para não apagar decisões já persistidas."""
+    motivos = motivos or {}
+    for rot in payload:
+        rid = f"rot_{rot.get('numero', 1):02d}"
+        achados = rot.get("consolidado", {}).get("achados", [])
+        for aid, dec in (decisoes.get(rid) or {}).items():
+            try:
+                idx = int(aid.lstrip("c")) - 1
+            except ValueError:
+                continue
+            if 0 <= idx < len(achados):
+                achados[idx]["decisao"] = dec
+                m = (motivos.get(rid) or {}).get(aid)
+                if m:
+                    achados[idx]["motivo_decisao"] = m
+    return payload
+
+
+def decisoes_para_ensinamentos(roteiros_raw, decisoes, motivos=None):
+    """Converte as decisões da sessão da tabela em ensinamentos no MESMO formato do
+    modo dinâmica (consumidos por revisar_dinamico.loop_aprendizado):
+      - pular                       → {**achado, "_tipo_decisao": "pular", "_motivo": ...}
+      - editada (≠ correcao, ≠ 'aplicado') → {**achado, "_tipo_decisao": "editar", ...}
+    Aplicar sem mudança não vira ensinamento (não tem sinal)."""
+    motivos = motivos or {}
+    ensinamentos = []
+    for rot in roteiros_raw:
+        rid = f"rot_{rot.get('numero', 1):02d}"
+        dec_map = decisoes.get(rid) or {}
+        if not dec_map:
+            continue
+        achados = rot.get("consolidado", {}).get("achados", [])
+        for aid, decisao in dec_map.items():
+            try:
+                idx = int(aid.lstrip("c")) - 1
+            except ValueError:
+                continue
+            if not (0 <= idx < len(achados)):
+                continue
+            achado = achados[idx]
+            motivo = (motivos.get(rid) or {}).get(aid, "")
+            correcao = (achado.get("correcao") or "").strip()
+            if decisao == "pular":
+                ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
+            elif decisao and decisao != "aplicado" and decisao.strip() != correcao:
+                ensinamentos.append({
+                    **achado,
+                    "_tipo_decisao": "editar",
+                    "_correcao_original": correcao,
+                    "_versao_usuario": decisao,
+                    "_motivo": motivo,
+                })
+    return ensinamentos
+
+
 # ─── Servidor Flask ───────────────────────────────────────────────────────────
 
 class TabelaServer:
@@ -150,7 +207,7 @@ class TabelaServer:
     fetch em /api/dados para re-renderizar sem recarregar a página.
     """
 
-    def __init__(self, url_gdocs: str = "", porta: int = 7432):
+    def __init__(self, url_gdocs: str = "", porta: int = 7432, json_path=None):
         import uuid as _uuid
         self.url_gdocs = url_gdocs
         self.porta = porta
@@ -159,6 +216,12 @@ class TabelaServer:
         self._next_event = threading.Event()
         self._app = None
         self._thread = None
+        # Decisões acumuladas na sessão: {roteiro_id: {achado_id: decisao}}.
+        # Persistidas a cada clique (rota /api/decisao) — fechar a aba não perde nada.
+        self.json_path = Path(json_path) if json_path else None
+        self.decisoes: dict = {}
+        self.motivos: dict = {}  # {roteiro_id: {achado_id: motivo do pulo/edição}}
+        self._lock_json = threading.Lock()
         # ID único por processo — impede que o localStorage de uma sessão anterior
         # contamine a sessão atual quando roteiros têm o mesmo id sequencial (rot_01...).
         # uuid4 garante unicidade mesmo com múltiplas execuções no mesmo segundo.
@@ -215,6 +278,24 @@ class TabelaServer:
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        @app.route("/api/decisao", methods=["POST"])
+        def api_decisao():
+            """Registra cada decisão (aplicar/editar/pular) no servidor a cada clique."""
+            data = request.get_json() or {}
+            aid = data.get("id")
+            if not aid:
+                return jsonify({"error": "id ausente"}), 400
+            decisao = data.get("decisao")  # None = decisão resetada
+            motivo = (data.get("motivo") or "").strip()
+            rid = server.dados_atual.get("roteiro", {}).get("id", "")
+            server.decisoes.setdefault(rid, {})[aid] = decisao
+            if motivo:
+                server.motivos.setdefault(rid, {})[aid] = motivo
+            else:
+                server.motivos.get(rid, {}).pop(aid, None)
+            server._persistir_decisao(rid, aid, decisao, motivo)
+            return jsonify({"ok": True})
+
         @app.route("/api/continuar", methods=["POST"])
         def api_continuar():
             """Usuário concluiu este roteiro. Bloqueia até o próximo estar pronto."""
@@ -233,6 +314,40 @@ class TabelaServer:
             return jsonify({"ok": True})
 
         return app
+
+    # ── Persistência de decisões ───────────────────────────────────────────
+    def _persistir_decisao(self, rid: str, aid: str, decisao, motivo: str = ""):
+        """Grava a decisão no campo `decisao` do achado correspondente no JSON do
+        relatório (revisao_*.json). Best-effort: falha aqui não derruba a sessão."""
+        if not self.json_path or not self.json_path.exists():
+            return
+        try:
+            numero = int(rid.rsplit("_", 1)[-1])
+            idx = int(aid.lstrip("c")) - 1
+        except ValueError:
+            return
+        with self._lock_json:
+            try:
+                dados = json.loads(self.json_path.read_text(encoding="utf-8"))
+                if isinstance(dados, dict):
+                    dados = [dados]
+                for rot in dados:
+                    if rot.get("numero") != numero:
+                        continue
+                    achados = rot.get("consolidado", {}).get("achados", [])
+                    if 0 <= idx < len(achados):
+                        achados[idx]["decisao"] = decisao
+                        if motivo:
+                            achados[idx]["motivo_decisao"] = motivo
+                        else:
+                            achados[idx].pop("motivo_decisao", None)
+                        self.json_path.write_text(
+                            json.dumps(dados, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    break
+            except Exception:
+                pass  # self.decisoes em memória segue valendo para o aprendizado
 
     # ── Controle público ───────────────────────────────────────────────────
     def iniciar(self, dados: dict):
@@ -278,7 +393,7 @@ class TabelaServer:
 
 # ─── Entrada pública (usada por revisar.py) ───────────────────────────────────
 
-def executar_sessao(roteiros_raw, url_gdocs="", porta=7432):
+def executar_sessao(roteiros_raw, url_gdocs="", porta=7432, json_path=None):
     """Processa os roteiros um por vez com a interface de tabela.
 
     Esta função é chamada pelo revisar.py depois que os agentes já rodaram.
@@ -290,7 +405,7 @@ def executar_sessao(roteiros_raw, url_gdocs="", porta=7432):
         print("❌ Flask não instalado. Execute: pip install flask")
         return
 
-    server = TabelaServer(url_gdocs=url_gdocs, porta=porta)
+    server = TabelaServer(url_gdocs=url_gdocs, porta=porta, json_path=json_path)
 
     for i, roteiro_raw in enumerate(roteiros_raw):
         meta = {
@@ -315,6 +430,12 @@ def executar_sessao(roteiros_raw, url_gdocs="", porta=7432):
     server.finalizar()
     print("\n🎉 Tabela Interativa encerrada.")
 
+    # Decisões da tabela alimentam o loop de aprendizado (igual ao modo dinâmica)
+    ensinamentos = decisoes_para_ensinamentos(roteiros_raw, server.decisoes, server.motivos)
+    if ensinamentos:
+        from revisar_dinamico import loop_aprendizado
+        loop_aprendizado(ensinamentos)
+
 
 # ─── Entrada standalone (CLI) ─────────────────────────────────────────────────
 
@@ -325,7 +446,7 @@ def iniciar_standalone(json_path, url_gdocs="", porta=7432):
         dados_raw = [dados_raw]
 
     print(f"\n📋 {len(dados_raw)} roteiro(s) carregado(s) de {json_path.name}")
-    executar_sessao(dados_raw, url_gdocs=url_gdocs, porta=porta)
+    executar_sessao(dados_raw, url_gdocs=url_gdocs, porta=porta, json_path=json_path)
 
 
 # ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -798,16 +919,24 @@ function setF(btn,f,activeClass){
 // ── Ações ─────────────────────────────────────────────────────────────────────
 function getC(id){return D.correcoes.find(c=>c.id===id)}
 
+// Persiste a decisão no servidor a cada clique — fechar a aba não perde nada.
+function sync(id,motivo){
+  const c=getC(id);if(!c)return;
+  fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id,decisao:c.decisao,motivo:motivo||''})}).catch(()=>{});
+}
+
 function aplicar(id){
   const c=getC(id);if(!c)return;
   c.decisao=c.correcao||'aplicado';
-  salvar();atualizarLinha(id);atualizarFooter();
+  salvar();sync(id);atualizarLinha(id);atualizarFooter();
 }
 
 function pular(id){
   const c=getC(id);if(!c)return;
   c.decisao='pular';
-  salvar();atualizarLinha(id);atualizarFooter();
+  const m=window.prompt('Motivo do pulo (opcional — Esc ignora):','');
+  salvar();sync(id,m||'');atualizarLinha(id);atualizarFooter();
 }
 
 function editar(id){
@@ -826,7 +955,7 @@ function conf(id){
   const ta=$id(`ta-${id}`);if(!ta)return;
   const novo=ta.value.trim();if(!novo)return;
   const c=getC(id);if(!c)return;
-  c.decisao=novo;salvar();atualizarLinha(id);atualizarFooter();
+  c.decisao=novo;salvar();sync(id);atualizarLinha(id);atualizarFooter();
 }
 
 function canc(id){atualizarLinha(id)}
@@ -925,7 +1054,7 @@ async function continuar(){
 // ── Resetar / Exportar ────────────────────────────────────────────────────────
 function resetar(){
   if(!confirm('Resetar todas as decisões?'))return;
-  D.correcoes.forEach(c=>c.decisao=null);
+  D.correcoes.forEach(c=>{if(c.decisao!==null){c.decisao=null;sync(c.id)}});
   localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
   renderTudo();
 }

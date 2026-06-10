@@ -476,7 +476,10 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
         print("   Depois rode novamente e escolha [3] Tabela Interativa.")
         return
 
-    from tabela_interativa import transformar_roteiro, TabelaServer
+    from tabela_interativa import (
+        transformar_roteiro, TabelaServer,
+        aplicar_decisoes_no_payload, decisoes_para_ensinamentos,
+    )
 
     pasta_relatorios = Path(__file__).parent / "relatorios"
     pasta_relatorios.mkdir(exist_ok=True)
@@ -484,7 +487,8 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
     arquivo_json = pasta_relatorios / f"revisao_{timestamp}.json"
 
     todos_resultados = []
-    server = TabelaServer(url_gdocs=url_gdocs or "", porta=_porta_livre())
+    server = TabelaServer(url_gdocs=url_gdocs or "", porta=_porta_livre(),
+                          json_path=arquivo_json)
     loop = asyncio.get_event_loop()
     next_task = None  # análise do próximo roteiro rodando em background
 
@@ -515,8 +519,13 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
 
         todos_resultados.append(resultado)
 
+        # Carimba as decisões já tomadas antes de regravar — a escrita incremental
+        # não pode apagar o que /api/decisao já persistiu para roteiros anteriores.
+        payload = aplicar_decisoes_no_payload(
+            _payload_json(todos_resultados), server.decisoes, server.motivos
+        )
         arquivo_json.write_text(
-            _json.dumps(_payload_json(todos_resultados), ensure_ascii=False, indent=2),
+            _json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -553,6 +562,14 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
     server.finalizar()
     print(f"\n🧩 JSON salvo: {arquivo_json}")
     print("\n🎉 Tabela Interativa concluída.")
+
+    # Decisões da tabela alimentam o loop de aprendizado (igual ao modo dinâmica)
+    from revisar_dinamico import loop_aprendizado
+    ensinamentos = decisoes_para_ensinamentos(
+        _payload_json(todos_resultados), server.decisoes, server.motivos
+    )
+    if ensinamentos:
+        loop_aprendizado(ensinamentos)
 
 
 def _porta_livre(inicio: int = 7432) -> int:
