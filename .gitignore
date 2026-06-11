@@ -21,3 +21,6 @@ __pycache__/
 
 # Backups
 preferencias.backup.md
+
+# Ledger de decisões (dados pessoais do editor — cada instalação gera o seu)
+decisoes.jsonl

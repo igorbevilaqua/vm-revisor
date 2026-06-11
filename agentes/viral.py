@@ -5,18 +5,15 @@ A nota viral é o principal output; as alavancas de melhoria viram achados estru
 """
 
 from agentes import AgenteBase
+from agentes.codex import CODEX_BLOCO
 
 
-SYSTEM_PROMPT = """Você é o Agente de Potencial Viral da Viral Media Labs (VML).
+SYSTEM_PROMPT = f"""Você é o Agente de Potencial Viral da Viral Media Labs (VML).
 
 Sua função é avaliar o potencial de viralização do roteiro e apontar as alavancas
 concretas que aumentariam esse potencial.
 
-## CODEX Narrativas VML — 15 estruturas
-01 Jornada do Herói | 02 Herói Improvável | 03 Herói Esquecido | 04 Davi e Golias
-05 Conflito Imprevisível | 06 O Iconoclasta | 07 Estratégia Oculta | 08 Urgência & Alerta
-09 Erro Fatal | 10 Investigação & Escândalo | 11 IA & Disrupção Tech | 12 Inovação & Sacada Genial
-13 Geopolítica & Impacto Brasil | 14 Paradoxo Contraintuitivo | 15 Narrativa Filosófica
+{CODEX_BLOCO}
 
 ## Fatores de viralização
 Emoção dominante · Identificação do público · Compartilhabilidade · Novidade/ângulo ·

@@ -596,6 +596,10 @@ class TabelaServer:
         self.url_gdocs = url_gdocs
         self.porta = porta
         self.dados_atual: dict = {}
+        # Histórico de roteiros já transformados na sessão (para navegação Voltar/
+        # Avançar entre roteiros já revisados, sem reprocessar nada).
+        self.historico: list = []
+        self.idx_hist: int = 0
         self._done_event = threading.Event()
         self._next_event = threading.Event()
         self._app = None
@@ -680,6 +684,24 @@ class TabelaServer:
             server._persistir_decisao(rid, aid, decisao, motivo)
             return jsonify({"ok": True})
 
+        @app.route("/api/navegar", methods=["POST"])
+        def api_navegar():
+            """Navega entre roteiros já revisados (histórico da sessão).
+            Não toca nos events do loop Python — o pipeline continua aguardando
+            no roteiro da fronteira; aqui só trocamos a 'página' exibida."""
+            data = request.get_json() or {}
+            try:
+                delta = int(data.get("delta", 0))
+            except (TypeError, ValueError):
+                return jsonify({"error": "delta inválido"}), 400
+            novo = server.idx_hist + delta
+            if not (0 <= novo < len(server.historico)):
+                return jsonify({"error": "fora do histórico"}), 400
+            server.idx_hist = novo
+            server.dados_atual = server.historico[novo]
+            server._stamp_nav()
+            return jsonify(server.dados_atual)
+
         @app.route("/api/continuar", methods=["POST"])
         def api_continuar():
             """Usuário concluiu este roteiro. Bloqueia até o próximo estar pronto."""
@@ -702,7 +724,8 @@ class TabelaServer:
     # ── Persistência de decisões ───────────────────────────────────────────
     def _persistir_decisao(self, rid: str, aid: str, decisao, motivo: str = ""):
         """Grava a decisão no campo `decisao` do achado correspondente no JSON do
-        relatório (revisao_*.json). Best-effort: falha aqui não derruba a sessão."""
+        relatório (revisao_*.json) E registra o evento no ledger de decisões.
+        Best-effort: falha aqui não derruba a sessão."""
         if not self.json_path or not self.json_path.exists():
             return
         try:
@@ -729,14 +752,55 @@ class TabelaServer:
                             json.dumps(dados, ensure_ascii=False, indent=2),
                             encoding="utf-8",
                         )
+                        # Ledger: todo evento de decisão vira memória permanente —
+                        # inclusive "aplicado" (reforço positivo) e "resetado".
+                        try:
+                            import ledger
+                            dec_norm, versao = ledger.normalizar_decisao(
+                                decisao, achados[idx].get("correcao", ""))
+                            ledger.registrar_decisao(
+                                achados[idx], dec_norm,
+                                motivo=motivo, versao_usuario=versao,
+                                cliente=rot.get("cliente") or "",
+                                roteiro_titulo=rot.get("titulo", ""),
+                                estrutura=(rot.get("contexto") or {}).get("estrutura", ""),
+                                origem="tabela",
+                                chave=f"{self.json_path.name}:{numero}:{idx}",
+                            )
+                        except Exception:
+                            pass
                     break
             except Exception:
                 pass  # self.decisoes em memória segue valendo para o aprendizado
+
+    # ── Navegação entre roteiros já revisados ──────────────────────────────
+    def _stamp_nav(self):
+        """Carimba no `dados_atual` a posição no histórico e as decisões já
+        tomadas (de `self.decisoes`) — assim, ao voltar para um roteiro
+        anterior, a tabela reabre com tudo que o revisor já decidiu."""
+        dados = self.dados_atual
+        if not dados:
+            return
+        rid = dados.get("roteiro", {}).get("id", "")
+        dec = self.decisoes.get(rid) or {}
+        for c in dados.get("correcoes", []):
+            if c.get("id") in dec:
+                c["decisao"] = dec[c["id"]]
+        meta = dados.setdefault("meta", {})
+        meta["hist_idx"] = self.idx_hist
+        meta["hist_total"] = len(self.historico)
+        meta["anterior_titulo"] = (
+            self.historico[self.idx_hist - 1].get("roteiro", {}).get("titulo")
+            if self.idx_hist > 0 else None
+        )
 
     # ── Controle público ───────────────────────────────────────────────────
     def iniciar(self, dados: dict):
         """Inicia o servidor Flask com os dados do primeiro roteiro."""
         self.dados_atual = dados
+        self.historico = [dados]
+        self.idx_hist = 0
+        self._stamp_nav()
         self._app = self._criar_app()
         if self._app is None:
             return False
@@ -768,6 +832,9 @@ class TabelaServer:
     def avancar(self, novos_dados: dict):
         """Atualiza dados para o próximo roteiro e libera o handler /api/continuar."""
         self.dados_atual = novos_dados
+        self.historico.append(novos_dados)
+        self.idx_hist = len(self.historico) - 1
+        self._stamp_nav()
         self._next_event.set()
 
     def finalizar(self):
@@ -1048,6 +1115,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
   font-size:12px;font-weight:700;letter-spacing:.05em;cursor:pointer;
   transition:all .15s;white-space:nowrap}
 .btn-continuar:hover{background:rgba(75,158,255,.15)}
+.btn-voltar{padding:9px 16px;background:transparent;color:var(--text-2);
+  border:1px solid var(--border);border-radius:5px;font-family:var(--mono);
+  font-size:12px;font-weight:700;letter-spacing:.05em;cursor:pointer;
+  transition:all .15s;white-space:nowrap}
+.btn-voltar:hover:not(:disabled){border-color:var(--border-light);color:var(--text)}
+.btn-voltar:disabled{opacity:.3;cursor:not-allowed}
 
 /* Toast */
 #toast{position:fixed;top:66px;right:24px;z-index:200;padding:10px 18px;border-radius:6px;
@@ -1143,6 +1216,7 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
     <button class="btn-sec" onclick="resetar()">Resetar</button>
     <button class="btn-sec" onclick="exportar()">Exportar JSON</button>
     <button class="btn-gravar" id="btn-gravar" onclick="gravar()" disabled>Gravar no Google Docs</button>
+    <button class="btn-voltar" id="btn-volt" onclick="voltar()" style="display:none" disabled>← Voltar</button>
     <button class="btn-continuar" id="btn-cont" onclick="continuar()" style="display:none">Continuar →</button>
   </div>
 </div>
@@ -1290,6 +1364,18 @@ function renderTudo(){
     btnCont.style.display='';btnCont.textContent='✓ Concluir';
   } else {
     btnCont.style.display='none';
+  }
+
+  // Voltar: visível em sessões multi-roteiro; desabilitado no primeiro,
+  // habilitado a partir do segundo (navega pelos roteiros já revisados).
+  const btnVolt=$id('btn-volt');
+  btnVolt.style.display=m.total>1?'':'none';
+  if(m.hist_idx>0&&m.anterior_titulo){
+    btnVolt.disabled=false;
+    btnVolt.textContent=`← ${m.anterior_titulo.slice(0,30)}`;
+  } else {
+    btnVolt.disabled=true;
+    btnVolt.textContent='← Voltar';
   }
 
   const tbody=$id('tbody');tbody.innerHTML='';
@@ -1588,8 +1674,30 @@ async function gravar(){
   }
 }
 
+// ── Navegação entre roteiros já revisados (Voltar / re-Avançar) ──────────────
+async function navegar(delta){
+  try{
+    const r=await fetch('/api/navegar',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({delta})});
+    if(!r.ok){toast('Não foi possível navegar','e');return;}
+    D=await r.json();
+    focoId=null;
+    carregar();renderTudo();window.scrollTo(0,0);
+    toast(`${delta<0?'←':'→'} ${D.roteiro.titulo.slice(0,40)}`,'s');
+  }catch(e){toast('Erro de conexão com o servidor local','e')}
+}
+
+function voltar(){
+  const m=D.meta||{};
+  if(m.hist_idx>0)navegar(-1);
+}
+
 // ── Continuar para o próximo roteiro ─────────────────────────────────────────
 async function continuar(){
+  // Se o próximo roteiro já foi revisado nesta sessão (voltamos no histórico),
+  // só navega pelo cache — o pipeline Python continua parado na fronteira.
+  const m=D.meta||{};
+  if(m.hist_total&&m.hist_idx<m.hist_total-1){navegar(1);return;}
   const loading=$id('loading');
   $id('loading-msg').textContent='Processando próximo roteiro...';
   loading.classList.add('show');

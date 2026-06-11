@@ -110,9 +110,11 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
     if verbose:
         print("  🔍 Extraindo contexto narrativo...")
     try:
-        contexto_str = await AgenteContexto().analisar_contexto(texto_agentes)
+        from agentes.contexto import formatar_contexto
+        contexto = await AgenteContexto().analisar_contexto(texto_agentes)
+        contexto_str = formatar_contexto(contexto)
     except Exception:
-        contexto_str = ""
+        contexto, contexto_str = {}, ""
 
     # O contexto é injetado como cabeçalho para todos os agentes lerem.
     if contexto_str:
@@ -190,6 +192,7 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
         "titulo": titulo,
         "texto": texto,
         "cliente": cliente,
+        "contexto": contexto,
         "analises": analises,
         "consolidado": consolidado,
         "relatorio": consolidado["relatorio"],
@@ -337,6 +340,7 @@ def _payload_json(resultados: list[dict]) -> list[dict]:
             "titulo": r["titulo"],
             "texto": r.get("texto", ""),
             "cliente": r.get("cliente"),
+            "contexto": r.get("contexto") or {},
             "consolidado": r["consolidado"],
         }
         for r in resultados

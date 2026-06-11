@@ -5,13 +5,7 @@ Cada oportunidade de melhoria narrativa vira um achado estruturado.
 """
 
 from agentes import AgenteBase
-
-
-CODEX = """As 15 estruturas do CODEX Narrativas VML:
-01 Jornada do Herói | 02 Herói Improvável | 03 Herói Esquecido | 04 Davi e Golias
-05 Conflito Imprevisível | 06 O Iconoclasta | 07 Estratégia Oculta | 08 Urgência & Alerta
-09 Erro Fatal | 10 Investigação & Escândalo | 11 IA & Disrupção Tech | 12 Inovação & Sacada Genial
-13 Geopolítica & Impacto Brasil | 14 Paradoxo Contraintuitivo | 15 Narrativa Filosófica"""
+from agentes.codex import CODEX_BLOCO as CODEX
 
 PRINCIPIOS_PADRAO = """Princípios de storytelling viral para Reels:
 - Abertura com gancho narrativo forte

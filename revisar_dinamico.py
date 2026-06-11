@@ -18,6 +18,8 @@ from pathlib import Path
 from terminal import patch_stdout
 patch_stdout()
 
+import ledger
+
 # ─── Cores no terminal ───────────────────────────────────────────────────────
 
 def negrito(s): return f"\033[1m{s}\033[0m"
@@ -237,6 +239,13 @@ def revisar_roteiro(roteiro, url):
     correcoes_aprovadas = []
     ensinamentos = []  # decisões com contexto para o loop de aprendizado
     trechos_processados: set = set()  # trava: trechos já exibidos (impede duplicatas e sobrepostos)
+    # Contexto fixo dos eventos do ledger nesta sessão (memória permanente de decisões)
+    _led = dict(
+        cliente=roteiro.get("cliente") or "",
+        roteiro_titulo=titulo,
+        estrutura=(roteiro.get("contexto") or {}).get("estrutura", ""),
+        origem="dinamica",
+    )
 
     for i, par in enumerate(paragrafos, 1):
         achados_par = achados_do_paragrafo(par, achados)
@@ -306,13 +315,16 @@ def revisar_roteiro(roteiro, url):
                                 "_versao_usuario": novo,
                                 "_motivo": "",
                             })
+                            ledger.registrar_decisao(achado, "editado", versao_usuario=novo, **_led)
                         else:
                             print(cinza("   Pulado (texto vazio)"))
                             ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": ""})
+                            ledger.registrar_decisao(achado, "pulado", **_led)
                         break
                     elif resp == "p":
                         motivo = input(cinza("   Motivo (opcional, Enter pra pular): ")).strip()
                         ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
+                        ledger.registrar_decisao(achado, "pulado", motivo=motivo, **_led)
                         print(cinza("   Pulado"))
                         break
                     elif resp == "q":
@@ -326,6 +338,8 @@ def revisar_roteiro(roteiro, url):
                     if resp == "a":
                         correcoes_aprovadas.append((trecho, correcao))
                         print(verde("   ✅ Aprovado"))
+                        # Reforço positivo: o agente acertou — sinal valioso no ledger
+                        ledger.registrar_decisao(achado, "aplicado", **_led)
                         break
                     elif resp == "e":
                         novo = input(f"   Novo texto (vai substituir «{trecho}»): ").strip()
@@ -340,13 +354,17 @@ def revisar_roteiro(roteiro, url):
                                 "_versao_usuario": novo,
                                 "_motivo": motivo,
                             })
+                            ledger.registrar_decisao(achado, "editado",
+                                                     versao_usuario=novo, motivo=motivo, **_led)
                         else:
                             print(cinza("   Pulado (texto vazio)"))
                             ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": ""})
+                            ledger.registrar_decisao(achado, "pulado", **_led)
                         break
                     elif resp == "p":
                         motivo = input(cinza("   Motivo (opcional, Enter pra pular): ")).strip()
                         ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
+                        ledger.registrar_decisao(achado, "pulado", motivo=motivo, **_led)
                         print(cinza("   Pulado"))
                         break
                     elif resp == "q":

@@ -264,13 +264,39 @@ class AgenteBase:
             None,
             lambda: self._chamar_api_estruturada(system_prompt, user_prompt, schema),
         )
+        # O tool use força o nome da tool, mas NÃO valida estritamente o conteúdo:
+        # o modelo pode devolver achados como strings (JSON serializado) ou outro
+        # formato fora do schema. Recupera o que der e descarta o resto — um achado
+        # malformado nunca pode derrubar a camada inteira.
+        if not isinstance(resultado, dict):
+            return {"achados": [], "resumo": "", "nota": 0}
+        achados_brutos = resultado.get("achados", [])
+        if not isinstance(achados_brutos, list):
+            achados_brutos = []
         achados_validos = []
-        for achado in resultado.get("achados", []):
+        descartados = 0
+        for achado in achados_brutos:
+            if isinstance(achado, str):
+                # Achado veio como JSON dentro de string — tenta desserializar
+                try:
+                    import json as _json
+                    achado = _json.loads(achado)
+                except (ValueError, TypeError):
+                    descartados += 1
+                    continue
+            if not isinstance(achado, dict):
+                descartados += 1
+                continue
+            # Normaliza campos de texto fora do tipo (o resto do pipeline assume str)
+            for campo in ("severidade", "natureza", "trecho_original", "correcao", "porque"):
+                v = achado.get(campo)
+                if v is not None and not isinstance(v, str):
+                    achado[campo] = str(v)
             achado["camada"] = self.CAMADA
             self._limitar_severidade(achado)
             # Limpa travessões dos campos gerados (não no trecho_original, que é citação literal)
             for campo in ("correcao", "porque", "resumo"):
-                if campo in achado:
+                if isinstance(achado.get(campo), str):
                     achado[campo] = _sem_travessao(achado[campo])
             trecho = (achado.get("trecho_original") or "").strip()
             correcao = (achado.get("correcao") or "").strip()
@@ -284,8 +310,10 @@ class AgenteBase:
                 achado["trecho_original"] = ""
                 achado["correcao"] = ""
             achados_validos.append(achado)
+        if descartados:
+            print(f"  🧹 {self.CAMADA}: {descartados} achado(s) malformado(s) descartado(s)")
         resultado["achados"] = achados_validos
-        if "resumo" in resultado:
+        if isinstance(resultado.get("resumo"), str):
             resultado["resumo"] = _sem_travessao(resultado["resumo"])
         return resultado
 
