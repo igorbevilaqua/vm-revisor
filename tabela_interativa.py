@@ -162,6 +162,33 @@ def _chave_prioridade(item):
     )
 
 
+# Inferência de posição para achados de INSERÇÃO (trecho vazio, correção com texto
+# novo). Um CTA de compartilhamento vai ao final; pistas no `porque` também contam.
+_RE_INS_CTA = _re.compile(
+    r"compartilh|coment[ae]|marca alguém|marque\b|me segue|segue (o|a|nosso)|siga\b|salv[ae] (esse|este|o vídeo)",
+    _re.IGNORECASE)
+_RE_INS_FIM = _re.compile(
+    r"\b(final do roteiro|fim do roteiro|encerramento|último parágrafo|depois do cta|antes do cta|conclus)",
+    _re.IGNORECASE)
+_RE_INS_INICIO = _re.compile(
+    r"\b(início do roteiro|inicio do roteiro|abertura|primeiro parágrafo|logo após o hook|ap[oó]s o hook|sub-?hook)",
+    _re.IGNORECASE)
+
+
+def _inferir_posicao_insercao(item) -> str:
+    """Retorna 'final', 'inicio' ou '' (indefinida) para um achado de inserção."""
+    if (item.get("camada") or "").lower() == "cta":
+        return "final"
+    if _RE_INS_CTA.search(item.get("correcao", "")):
+        return "final"
+    pq = item.get("porque", "")
+    if _RE_INS_FIM.search(pq):
+        return "final"
+    if _RE_INS_INICIO.search(pq):
+        return "inicio"
+    return ""
+
+
 def _frases_slices(s: str) -> list:
     """Retorna as fatias (start, end) de cada frase de `s`, preservando o texto
     literal (incluindo o espaçamento que segue a pontuação)."""
@@ -317,11 +344,16 @@ def _consolidar_segmento(seg_texto: str, itens: list, para_idx: int) -> dict:
         depois = depois[:s] + it["correcao"] + depois[e:]
 
     incorporados = [it for _, _, it in sorted(aceitos, key=lambda x: x[0])]
+    nao_incorporados = []
     if sobrepostos:
         fundido = _fundir_llm(seg_texto, incorporados + sobrepostos)
         if fundido:
             depois = fundido
             incorporados = incorporados + sobrepostos
+        else:
+            # Fusão indisponível/implausível: complementares de outra camada NÃO
+            # podem sumir — voltam ao caller para virar linhas individuais.
+            nao_incorporados = sobrepostos
 
     primario = min(incorporados, key=_chave_prioridade)
     camadas = []
@@ -333,9 +365,12 @@ def _consolidar_segmento(seg_texto: str, itens: list, para_idx: int) -> dict:
     else:
         porque = primario["porque"]
 
-    return {
+    ins_label = next((it.get("insercao_label") for it in incorporados
+                      if it.get("insercao_label")), None)
+    return nao_incorporados, {
         "id": primario["id"],
         "ids": [it["id"] for it in incorporados],
+        "insercao_label": ins_label,
         "tipo": "correcao",
         "severidade": primario["severidade"],
         "natureza": primario["natureza"],
@@ -369,12 +404,40 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         offset = (idx if idx != -1 else offset) + len(p)
 
     itens = []
+    descartados = 0
     for i, a in enumerate(achados, 1):
         t = (a.get("trecho_original") or "").strip()
         c = (a.get("correcao") or "").strip()
         if not t and not c:
+            descartados += 1
             continue
         item = transformar_achado(a, i)
+        # A sanitização pode ter zerado os dois campos (correção era instrução
+        # editorial): sem trecho E sem correção não há nada para decidir — descarta.
+        if not item["trecho_original"] and not item["correcao"]:
+            descartados += 1
+            continue
+        # INSERÇÃO (trecho vazio, correção com texto novo): ancora no parágrafo
+        # vizinho do ponto de inserção. Vira uma substituição real — o Antes mostra
+        # o contexto do entorno, a linha entra na posição certa do fluxo sequencial
+        # e o Aplicar grava de verdade no Doc (parágrafo → parágrafo + inserção).
+        if not item["trecho_original"] and item["correcao"] and paragrafos_raw:
+            pos = _inferir_posicao_insercao(item)
+            if pos == "final":
+                ancora = paragrafos_raw[-1]
+                item["trecho_original"] = ancora
+                item["correcao"] = f"{ancora}\n\n{item['correcao']}"
+                item["insercao_label"] = "✚ Inserção — ao final do roteiro"
+            elif pos == "inicio":
+                ancora = paragrafos_raw[1] if len(paragrafos_raw) > 1 else paragrafos_raw[0]
+                item["trecho_original"] = ancora
+                item["correcao"] = f"{ancora}\n\n{item['correcao']}"
+                item["insercao_label"] = "✚ Inserção — no início do roteiro (após o hook)"
+            else:
+                # Posição não inferível: o editor decide onde entra (Aplicar
+                # desabilitado na interface; Editar continua disponível).
+                item["insercao_indefinida"] = True
+                item["insercao_label"] = "✚ Inserção — posição a definir pelo editor"
         # Divisão na origem: estreita achados longos para as frases que mudaram
         if item["trecho_original"] and item["correcao"]:
             nt, nc = _estreitar_achado(item["trecho_original"], item["correcao"])
@@ -384,6 +447,8 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
                 item["diff_inline"] = _diff_inline(nt, nc)
         item["_para_idx"] = _para_idx_de_achado(item["trecho_original"], texto, para_offsets)
         itens.append(item)
+    if descartados:
+        print(f"   🧹 {descartados} achado(s) sem trecho e sem correção descartado(s) da tabela")
 
     # ── Leitura sequencial: a tabela reproduz o roteiro do início ao fim ──────
     # `linhas` é o plano de renderização, na ordem original do texto:
@@ -420,20 +485,23 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
                 if not seg_achs:
                     linhas.append({"tipo": "leitura", "texto": seg})
                 else:
-                    row = _consolidar_segmento(seg, seg_achs, pi)
+                    restantes, row = _consolidar_segmento(seg, seg_achs, pi)
                     correcoes.append(row)
                     linhas.append({"tipo": "correcao", "id": row["id"]})
+                    # Complementares cuja fusão LLM falhou: linhas próprias logo
+                    # após a consolidada — nunca somem silenciosamente.
+                    for a in restantes:
+                        _linha_individual(a)
         # Trecho localizado no parágrafo só com match normalizado (espaços): linha
         # individual logo após o parágrafo, preservando a posição na leitura.
         for a in fora:
             _linha_individual(a)
 
-    # Achados sem trecho localizado (inserções, beats ausentes) — seção final
+    # Restantes sem posição no texto (inserção indefinida, trecho não localizado):
+    # entram no fim do fluxo, sem seção separada — a leitura sequencial não quebra.
     finais = [it for it in itens if it["_para_idx"] >= n_par]
-    if finais:
-        linhas.append({"tipo": "secao", "label": "Achados sem trecho identificado"})
-        for a in sorted(finais, key=_chave_prioridade):
-            _linha_individual(a)
+    for a in sorted(finais, key=_chave_prioridade):
+        _linha_individual(a)
 
     veredicto = cons.get("veredicto", "—")
     return {
@@ -878,6 +946,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .badge-a{background:var(--aviso-bg);border-color:var(--aviso-border);color:var(--aviso)}
 .badge-s{background:var(--sugestao-bg);border-color:var(--sugestao-border);color:var(--sugestao)}
 .tag-row{display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap}
+.ins-label{margin-top:5px;font-family:var(--mono);font-size:9px;color:var(--aprovado);
+  letter-spacing:.03em;line-height:1.4}
 .tag-c{display:inline-block;padding:2px 6px;border-radius:2px;
   font-family:var(--mono);font-size:9px;font-weight:500;background:var(--surface-3);
   color:var(--text-3);border:1px solid var(--border);letter-spacing:.04em}
@@ -1143,7 +1213,12 @@ function diff(b,a){
 function renderDiff(c){
   const t=c.trecho_original,d=c.correcao;
   if(!t&&!d)return['<span class="diff-null">—</span>','<span class="diff-null">—</span>'];
-  if(!t)return['<span class="diff-null">—</span>',`<div class="diff-blk db-dep">${esc(d)}</div>`];
+  if(!t){
+    const ant=c.insercao_indefinida
+      ?'<span class="diff-null">Posição: a definir pelo editor</span>'
+      :'<span class="diff-null">—</span>';
+    return[ant,`<div class="diff-blk db-dep">${esc(d)}</div>`];
+  }
   if(!d)return[`<div class="diff-blk db-ant">${esc(t)}</div>`,'<span class="diff-null">— Ver ⓘ</span>'];
   const r=diff(t,d);
   if((r.inline||c.diff_inline)&&r.inline){
@@ -1162,8 +1237,10 @@ function renderBadge(c){
   // Linha consolidada mostra as tags de TODAS as camadas que contribuíram
   const tags=(c.camadas&&c.camadas.length?c.camadas:[c.camada])
     .map(t=>`<span class="tag-c">${esc(t)}</span>`).join('');
+  // Inserção: onde entra fica visível na linha, sem precisar de hover
+  const ins=c.insercao_label?`<div class="ins-label">${esc(c.insercao_label)}</div>`:'';
   return`<div class="badge ${cls}">${lbl}</div>
-    <div class="tag-row">${tags}${info}</div>`;
+    <div class="tag-row">${tags}${info}</div>${ins}`;
 }
 
 function renderAcao(c){
@@ -1179,8 +1256,11 @@ function renderAcao(c){
     <button class="btn-ac btn-en" onclick="abrirEnsinar('${c.id}')">✦ Ensinar</button>${ensinarBlk}`;
   if(d&&d!=='pular')return`<div class="st-ap">✓ Aplicado</div>
     <button class="btn-ac btn-en" onclick="abrirEnsinar('${c.id}')">✦ Ensinar</button>${ensinarBlk}`;
+  // Inserção sem posição: Aplicar fica fora (não há onde aplicar); Editar decide
+  const btnAp=c.insercao_indefinida?'':
+    `<button class="btn-ac btn-ap" onclick="aplicar('${c.id}')">✓ Aplicar</button>`;
   return`<div class="acao-wrap">
-    <button class="btn-ac btn-ap" onclick="aplicar('${c.id}')">✓ Aplicar</button>
+    ${btnAp}
     <button class="btn-ac btn-ed" onclick="editar('${c.id}')">✎ Editar</button>
     <button class="btn-ac btn-pu" onclick="pular('${c.id}')">✕ Pular</button>
     <button class="btn-ac btn-en" onclick="abrirEnsinar('${c.id}')">✦ Ensinar</button>
@@ -1385,7 +1465,7 @@ function sync(id,motivo){
 }
 
 function aplicar(id){
-  const c=getC(id);if(!c)return;
+  const c=getC(id);if(!c||c.insercao_indefinida)return;
   c.decisao=c.correcao||'aplicado';
   salvar();sync(id);atualizarLinha(id);atualizarFooter();
   const nx=nextPendingAfter(id);if(nx){focoId=nx;aplicarFoco();}
