@@ -18,6 +18,21 @@ import threading
 import webbrowser
 from pathlib import Path
 
+CONFIG_PATH = Path(__file__).parent / "config.json"
+
+
+def ler_config() -> dict:
+    try:
+        return json.loads(CONFIG_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def salvar_config(dados: dict):
+    atual = ler_config()
+    atual.update(dados)
+    CONFIG_PATH.write_text(json.dumps(atual, indent=2, ensure_ascii=False))
+
 from terminal import patch_stdout
 patch_stdout()
 
@@ -75,11 +90,22 @@ _VERBOS_INSTRUCAO = {
 }
 
 
+import re as _re
+
+
 def _correcao_e_instrucao(texto):
-    """True se o texto começa com verbo de instrução editorial — não é substituto literal."""
+    """True se o texto é instrução editorial e não um substituto literal.
+    Detecta dois padrões:
+    1. Começa com verbo de instrução (ex.: 'Verificar o valor...')
+    2. Contém placeholder entre colchetes (ex.: 'gastou [verificar: X]')
+    """
     if not texto:
         return False
-    return texto.strip().split()[0].lower().rstrip(".,;:)") in _VERBOS_INSTRUCAO
+    if texto.strip().split()[0].lower().rstrip(".,;:)") in _VERBOS_INSTRUCAO:
+        return True
+    if _re.search(r"\[.+?\]", texto):
+        return True
+    return False
 
 
 def transformar_achado(achado, idx):
@@ -89,6 +115,7 @@ def transformar_achado(achado, idx):
 
     # Segunda camada de defesa: se `correcao` ainda chegou como instrução editorial
     # (agente ignorou o prompt), zera os dois campos e preserva a nota em `porque`.
+    # Achados com trecho="" e correcao="" são descartados em transformar_roteiro.
     if _correcao_e_instrucao(correcao):
         porque = f"{porque} [Sugestão estrutural: {correcao}]".strip()
         trecho = ""
@@ -110,16 +137,70 @@ def transformar_achado(achado, idx):
     }
 
 
+def _para_idx_de_achado(trecho: str, texto: str, para_offsets: list[int]) -> int:
+    """Retorna o índice do parágrafo onde trecho_original aparece.
+    Usa o offset de caracteres no texto inteiro mapeado aos parágrafos.
+    Achados sem trecho ou não encontrados ficam no índice len(para_offsets) (fim)."""
+    if not trecho or not texto:
+        return len(para_offsets)
+    pos = texto.find(trecho)
+    if pos == -1:
+        # Tenta com trecho normalizado (colapsa espaços/quebras)
+        trecho_n = " ".join(trecho.split())
+        texto_n = " ".join(texto.split())
+        pos_n = texto_n.find(trecho_n)
+        if pos_n == -1:
+            return len(para_offsets)
+        # Mapeia posição normalizada de volta ao índice do parágrafo
+        pos = pos_n
+        offsets = para_offsets  # aproximação aceitável
+    else:
+        offsets = para_offsets
+    for i in range(len(offsets) - 1, -1, -1):
+        if pos >= offsets[i]:
+            return i
+    return 0
+
+
 def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
     cons = roteiro_raw.get("consolidado", {})
     achados = cons.get("achados", [])
+    texto = roteiro_raw.get("texto", "")
+
+    # Parágrafos na ordem do roteiro
+    paragrafos_raw = [p.strip() for p in texto.split("\n") if p.strip()]
+
+    # Offsets de cada parágrafo no texto inteiro (para posicionamento dos achados)
+    para_offsets: list[int] = []
+    offset = 0
+    for p in paragrafos_raw:
+        idx = texto.find(p, offset)
+        para_offsets.append(idx if idx != -1 else offset)
+        offset = (idx if idx != -1 else offset) + len(p)
+
     correcoes = []
     for i, a in enumerate(achados, 1):
         t = (a.get("trecho_original") or "").strip()
         c = (a.get("correcao") or "").strip()
         if not t and not c:
             continue
-        correcoes.append(transformar_achado(a, i))
+        item = transformar_achado(a, i)
+        item["_para_idx"] = _para_idx_de_achado(t, texto, para_offsets)
+        correcoes.append(item)
+
+    # Dedup: max 1 achado per unique trecho_original (keep highest priority)
+    _sev = {"erro": 0, "aviso": 1, "sugestao": 2}
+    _nat = {"objetivo": 0, "subjetivo": 1}
+    seen_t: dict = {}
+    for item2 in sorted(correcoes, key=lambda x: (
+        _sev.get(x.get("severidade", "sugestao"), 2),
+        _nat.get(x.get("natureza", "subjetivo"), 1),
+        -(x.get("confianca") or 0),
+    )):
+        t2 = item2["trecho_original"]
+        if t2 and t2 not in seen_t:
+            seen_t[t2] = item2
+    correcoes = sorted(seen_t.values(), key=lambda x: x.get("_para_idx", 9999))
 
     veredicto = cons.get("veredicto", "—")
     return {
@@ -130,6 +211,7 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
             "score_geral": cons.get("nota_geral", 0),
         },
         "url_gdocs": url_gdocs or "",
+        "paragrafos": paragrafos_raw,
         "correcoes": correcoes,
         "meta": meta or {"total": 1, "atual": 1, "proximo_titulo": None},
     }
@@ -313,6 +395,14 @@ class TabelaServer:
             server._next_event.set()  # desbloqueia sem esperar
             return jsonify({"ok": True})
 
+        @app.route("/api/config", methods=["GET", "POST"])
+        def api_config():
+            if request.method == "GET":
+                return jsonify(ler_config())
+            dados = request.get_json() or {}
+            salvar_config(dados)
+            return jsonify({"ok": True})
+
         return app
 
     # ── Persistência de decisões ───────────────────────────────────────────
@@ -456,7 +546,7 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Tabela Interativa — VML</title>
+<title>Revisor — VML</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -466,7 +556,6 @@ _HTML = r"""<!DOCTYPE html>
   --bloqueante:#FF4545;--bloqueante-bg:rgba(255,69,69,.08);--bloqueante-border:rgba(255,69,69,.3);
   --aviso:#F5A623;--aviso-bg:rgba(245,166,35,.08);--aviso-border:rgba(245,166,35,.3);
   --sugestao:#4B9EFF;--sugestao-bg:rgba(75,158,255,.08);--sugestao-border:rgba(75,158,255,.25);
-  --leitura:#8891AA;--leitura-bg:rgba(136,145,170,.06);--leitura-border:rgba(136,145,170,.15);
   --aprovado:#00C97F;--aprovado-bg:rgba(0,201,127,.08);
   --text:#E8ECF5;--text-2:#9BA3BB;--text-3:#5C6480;
   --antes:rgba(255,69,69,.12);--antes-text:#FF8080;
@@ -505,6 +594,20 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .verd-ajuste{background:var(--aviso-bg);border-color:var(--aviso-border);color:var(--aviso)}
 .verd-ok{background:var(--aprovado-bg);border-color:rgba(0,201,127,.3);color:var(--aprovado)}
 
+/* ── Toggle web search ─── */
+.ws-toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  padding:3px 10px;border-radius:4px;border:1px solid var(--border);
+  font-family:var(--mono);font-size:10px;color:var(--text-3);
+  transition:all .2s;user-select:none;white-space:nowrap}
+.ws-toggle:hover{border-color:var(--border-light);color:var(--text-2)}
+.ws-toggle.on{border-color:rgba(75,158,255,.4);background:rgba(75,158,255,.08);color:#4B9EFF}
+.ws-track{width:24px;height:13px;border-radius:7px;border:1px solid currentColor;
+  position:relative;flex-shrink:0;transition:background .2s}
+.ws-toggle.on .ws-track{background:rgba(75,158,255,.25)}
+.ws-thumb{width:9px;height:9px;border-radius:50%;background:currentColor;
+  position:absolute;top:1px;left:1px;transition:left .2s}
+.ws-toggle.on .ws-thumb{left:12px}
+
 /* ── Filtros ─── */
 #filtros{position:sticky;top:52px;z-index:99;background:var(--surface);
   border-bottom:1px solid var(--border);padding:9px 24px;display:flex;align-items:center;gap:6px}
@@ -521,20 +624,21 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 /* ── Tabela ─── */
 #tabela-wrap{padding:0 24px 16px}
 .tabela{width:100%;border-collapse:collapse;table-layout:fixed}
-.tabela th{position:sticky;top:93px;z-index:90;background:var(--surface-2);
-  border:1px solid var(--border);padding:9px 10px;text-align:left;
+.tabela colgroup col.col-n{width:36px}
+.tabela colgroup col.col-tipo{width:110px}
+.tabela colgroup col.col-ac{width:100px}
+.tabela th{position:sticky;top:90px;z-index:90;background:var(--surface-2);
+  border:1px solid var(--border);padding:8px 10px;text-align:left;
   font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text-3);
   text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;overflow:hidden}
 .tabela th:first-child{text-align:center}
-.col-n{width:40px}.col-t{width:108px}.col-tr{width:170px}
-.col-a{width:195px}.col-d{width:195px}.col-j{width:185px}.col-ac{width:118px}
-.tabela td{border:1px solid var(--border);padding:9px 10px;vertical-align:top;transition:background .15s,box-shadow .15s}
+.tabela td{border:1px solid var(--border);padding:8px 10px;vertical-align:top;
+  transition:background .15s,box-shadow .15s}
 
 /* Row types */
 .rb{background:var(--bloqueante-bg);border-left:3px solid var(--bloqueante)!important}
 .ra{background:var(--aviso-bg);border-left:3px solid var(--aviso)!important}
 .rs{border-left:3px solid var(--sugestao)!important}
-.rl{background:var(--leitura-bg);border-left:3px solid var(--leitura-border)!important}
 .sec-row{background:var(--surface-2)}
 .sec-row td{border-top:2px solid var(--border-light)!important;padding:10px 14px;
   font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text-2);
@@ -544,42 +648,51 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .row-pulada{opacity:.4}
 .row-hidden{display:none}
 
+/* Leitura row */
+.lr-row td{border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+  border-left:1px solid var(--border);border-right:1px solid var(--border);padding:9px 12px}
+.lr-n{font-family:var(--mono);font-size:10px;color:var(--text-3);text-align:center;
+  vertical-align:middle}
+.lr-texto{font-size:13px;color:var(--text-2);line-height:1.65}
+
 /* Num cell */
 .nc{font-family:var(--mono);font-size:11px;color:var(--text-3);text-align:center}
 
-/* Badge */
-.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:3px;
+/* Badge + camada */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border-radius:3px;
   font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.05em;
-  text-transform:uppercase;border:1px solid transparent}
+  text-transform:uppercase;border:1px solid transparent;white-space:nowrap}
 .badge-e{background:var(--bloqueante-bg);border-color:var(--bloqueante-border);color:var(--bloqueante)}
 .badge-a{background:var(--aviso-bg);border-color:var(--aviso-border);color:var(--aviso)}
 .badge-s{background:var(--sugestao-bg);border-color:var(--sugestao-border);color:var(--sugestao)}
-.tag-c{display:inline-block;margin-top:5px;padding:2px 6px;border-radius:2px;
+.tag-row{display:flex;align-items:center;gap:5px;margin-top:5px}
+.tag-c{display:inline-block;padding:2px 6px;border-radius:2px;
   font-family:var(--mono);font-size:9px;font-weight:500;background:var(--surface-3);
   color:var(--text-3);border:1px solid var(--border);letter-spacing:.04em}
 
-/* Trecho */
-.tr-text{font-size:12px;color:var(--text-2);font-style:italic;line-height:1.5;
-  overflow:hidden;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical}
+/* Info icon (i) — tooltip trigger */
+.ii{cursor:help;color:var(--text-3);font-size:12px;opacity:.65;transition:opacity .15s;
+  user-select:none;line-height:1}
+.ii:hover{opacity:1;color:var(--sugestao)}
 
-/* Diff blocks */
-.diff-blk{border-radius:4px;padding:7px 9px;font-family:var(--mono);font-size:12px;
-  line-height:1.6;border:1px solid transparent;word-break:break-word}
+/* Tooltip flutuante */
+#tt{display:none;position:fixed;z-index:500;background:var(--surface-3);
+  border:1px solid var(--border-light);color:var(--text);
+  padding:9px 13px;border-radius:5px;font-family:var(--sans);font-size:12px;
+  line-height:1.55;max-width:320px;max-height:220px;overflow-y:auto;
+  pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,.45);
+  white-space:pre-wrap;word-break:break-word}
+
+/* Diff blocks — max 3 linhas */
+.diff-blk{border-radius:4px;padding:6px 9px;font-family:var(--mono);font-size:12px;
+  line-height:1.55;border:1px solid transparent;word-break:break-word;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
 .db-ant{background:var(--antes);border-color:rgba(255,69,69,.2);color:var(--antes-text)}
 .db-dep{background:var(--depois);border-color:rgba(0,201,127,.2);color:var(--depois-text)}
 .diff-null{color:var(--text-3);font-size:11px;font-style:italic;font-family:var(--mono)}
 .del{background:rgba(255,69,69,.22);color:var(--antes-text);text-decoration:line-through;
   border-radius:2px;padding:0 2px}
 .ins{background:rgba(0,201,127,.22);color:var(--depois-text);border-radius:2px;padding:0 2px}
-
-/* Justificativa */
-.jt{font-size:12px;color:var(--text-2);line-height:1.5;margin-bottom:7px}
-.conf-wrap{display:flex;align-items:center;gap:6px;margin-top:5px}
-.conf-lbl{font-family:var(--mono);font-size:9px;color:var(--text-3);white-space:nowrap}
-.conf-track{flex:1;height:3px;background:var(--surface-3);border-radius:2px;overflow:hidden}
-.conf-fill{height:100%;border-radius:2px;transition:width .3s}
-.cf-hi{background:var(--aprovado)}.cf-md{background:var(--sugestao)}.cf-lo{background:var(--aviso)}
-.conf-val{font-family:var(--mono);font-size:9px;color:var(--text-3);width:26px;text-align:right}
 
 /* Botões ação */
 .acao-wrap{display:flex;flex-direction:column;gap:4px}
@@ -596,6 +709,22 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .btn-cf:hover{background:rgba(0,201,127,.18)}
 .btn-ca{background:transparent;color:var(--text-3);border-color:var(--border)}
 .btn-ca:hover{color:var(--text-2);border-color:var(--border-light)}
+.btn-en{background:transparent;color:var(--text-3);border-color:var(--border);
+  font-size:10px;padding:3px 0}
+.btn-en:hover{color:var(--text-2);border-color:var(--border-light)}
+.ensinar-wrap{margin-top:6px;display:none}
+.ensinar-wrap.aberto{display:block}
+.ensinar-ta{width:100%;min-height:52px;padding:6px 8px;background:var(--surface-3);
+  border:1px solid var(--border);border-radius:4px;color:var(--text);
+  font-family:var(--mono);font-size:11px;line-height:1.5;resize:vertical;outline:none;
+  box-sizing:border-box}
+.ensinar-ta:focus{border-color:var(--sugestao-border)}
+.ensinar-btns{display:flex;gap:4px;margin-top:4px}
+.btn-en-cf{flex:1;padding:4px 0;border-radius:4px;font-family:var(--mono);font-size:10px;
+  font-weight:600;cursor:pointer;border:1px solid rgba(0,201,127,.3);
+  background:var(--aprovado-bg);color:var(--aprovado)}
+.btn-en-ca{flex:1;padding:4px 0;border-radius:4px;font-family:var(--mono);font-size:10px;
+  cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-3)}
 
 /* Estados */
 .st-ap{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--aprovado);
@@ -654,7 +783,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .tabela tbody tr.rb:hover td{background:rgba(255,69,69,.13)!important}
 .tabela tbody tr.ra:hover td{background:rgba(245,166,35,.13)!important}
 .tabela tbody tr.rs:hover td{background:rgba(75,158,255,.05)!important}
-.tabela tbody tr.rl:hover td{background:rgba(136,145,170,.10)!important}
+.tabela tbody tr.lr-row:hover td{background:rgba(136,145,170,.06)!important}
 .btn-ac:active{transform:scale(0.95);transition:transform .08s}
 .btn-gravar:active,.btn-continuar:active,.btn-sec:active{transform:scale(0.97);transition:transform .08s}
 
@@ -667,7 +796,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 
 /* ── Foco de teclado (J/K) ─── */
 tr.row-focus{outline:2px solid var(--sugestao);outline-offset:-2px}
-tr.row-focus td{background:rgba(75,158,255,.06)}
+tr.row-focus td{background:rgba(75,158,255,.06)!important}
 .kbd-legend{font-family:var(--mono);font-size:10px;color:var(--text-3);
   margin-left:12px;white-space:nowrap}
 </style>
@@ -685,12 +814,17 @@ tr.row-focus td{background:rgba(75,158,255,.06)}
     <div class="stat-chip chip-a" id="chip-a"><span class="dot"></span><span id="n-a">0</span> aviso(s)</div>
     <div class="stat-chip chip-s" id="chip-s"><span class="dot"></span><span id="n-s">0</span> sugestão(ões)</div>
     <span class="verd-badge" id="verd-badge">—</span>
+    <div class="ws-toggle" id="ws-toggle" onclick="toggleWebSearch()" title="Habilita busca na web no fact-check da próxima revisão">
+      <span class="ws-track"><span class="ws-thumb"></span></span>
+      <span id="ws-label">web search</span>
+    </div>
   </div>
 </div>
 
 <div id="filtros">
-  <span class="filtro-label">Filtrar:</span>
-  <button class="fbtn fa" onclick="setF(this,'todos')">Todos</button>
+  <span class="filtro-label">Ver:</span>
+  <button class="fbtn fa" onclick="setF(this,'roteiro')">Roteiro</button>
+  <button class="fbtn" onclick="setF(this,'todos')">Todos os achados</button>
   <button class="fbtn" onclick="setF(this,'bloqueantes','fa-b')">Bloqueantes</button>
   <button class="fbtn" onclick="setF(this,'avisos','fa-a')">Avisos</button>
   <button class="fbtn" onclick="setF(this,'sugestoes')">Sugestões</button>
@@ -700,14 +834,19 @@ tr.row-focus td{background:rgba(75,158,255,.06)}
 
 <div id="tabela-wrap">
   <table class="tabela" id="tbl">
+    <colgroup>
+      <col class="col-n">
+      <col class="col-tipo">
+      <col>
+      <col>
+      <col class="col-ac">
+    </colgroup>
     <thead><tr>
-      <th class="col-n">#</th>
-      <th class="col-t">Tipo / Camada</th>
-      <th class="col-tr">Trecho do Roteiro</th>
-      <th class="col-a">Antes</th>
-      <th class="col-d">Depois</th>
-      <th class="col-j">Justificativa</th>
-      <th class="col-ac">Ação</th>
+      <th>#</th>
+      <th>Tipo / Camada</th>
+      <th>Antes</th>
+      <th>Depois</th>
+      <th>Ação</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -725,14 +864,36 @@ tr.row-focus td{background:rgba(75,158,255,.06)}
 </div>
 
 <div id="toast"></div>
+<div id="tt"></div>
 <div id="loading"><div class="spin"></div><div class="loading-msg" id="loading-msg">Aguarde...</div></div>
 
 <script>
 // ── Dados iniciais (embedded no primeiro load) ───────────────────────────────
 let D = __DADOS_JSON__;
 const SESSAO = '__SESSAO_ID__';
-let filtro = 'todos';
-let numFiltroBtn = null;
+let filtro = 'roteiro';
+
+// ── Tooltip flutuante ────────────────────────────────────────────────────────
+(function(){
+  const tt=document.getElementById('tt');
+  let cur=null;
+  document.addEventListener('mouseover',e=>{
+    const el=e.target.closest('[data-w]');
+    if(!el){tt.style.display='none';cur=null;return;}
+    if(el===cur)return;
+    cur=el;tt.textContent=el.dataset.w||'';tt.style.display='block';place(e);
+  });
+  document.addEventListener('mousemove',e=>{if(tt.style.display==='block')place(e);});
+  document.addEventListener('mouseout',e=>{
+    if(!e.relatedTarget||!e.relatedTarget.closest('[data-w]')){tt.style.display='none';cur=null;}
+  });
+  function place(e){
+    const pad=14,mw=320;
+    let x=e.clientX+pad,y=e.clientY+pad;
+    if(x+mw>window.innerWidth)x=e.clientX-mw-pad;
+    tt.style.left=Math.max(0,x)+'px';tt.style.top=Math.max(0,y)+'px';
+  }
+})();
 
 // ── Utilitários ──────────────────────────────────────────────────────────────
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -745,8 +906,7 @@ function salvar(){
 }
 function carregar(){
   const k=`vml_${SESSAO}_${D.roteiro.id}`;
-  const s=localStorage.getItem(k);
-  if(!s)return;
+  const s=localStorage.getItem(k);if(!s)return;
   const m=JSON.parse(s);
   D.correcoes.forEach(c=>{if(c.id in m)c.decisao=m[c.id]});
 }
@@ -769,8 +929,8 @@ function diff(b,a){
 function renderDiff(c){
   const t=c.trecho_original,d=c.correcao;
   if(!t&&!d)return['<span class="diff-null">—</span>','<span class="diff-null">—</span>'];
-  if(!t)return['<span class="diff-null">— Não se aplica</span>',`<div class="diff-blk db-dep">${esc(d)}</div>`];
-  if(!d)return[`<div class="diff-blk db-ant">${esc(t)}</div>`,'<span class="diff-null">— Sugestão estrutural<br><small>Ver justificativa</small></span>'];
+  if(!t)return['<span class="diff-null">—</span>',`<div class="diff-blk db-dep">${esc(d)}</div>`];
+  if(!d)return[`<div class="diff-blk db-ant">${esc(t)}</div>`,'<span class="diff-null">— Ver ⓘ</span>'];
   const r=diff(t,d);
   if((r.inline||c.diff_inline)&&r.inline){
     return[
@@ -781,29 +941,33 @@ function renderDiff(c){
   return[`<div class="diff-blk db-ant">${esc(t)}</div>`,`<div class="diff-blk db-dep">${esc(d)}</div>`];
 }
 
-function renderConf(v){
-  const cls=v>=85?'cf-hi':v>=60?'cf-md':'cf-lo';
-  return`<div class="conf-wrap"><span class="conf-lbl">Conf.</span>
-    <div class="conf-track"><div class="conf-fill ${cls}" style="width:${v}%"></div></div>
-    <span class="conf-val">${v}%</span></div>`;
-}
-
 function renderBadge(c){
   const cls=c.severidade==='erro'?'badge-e':c.severidade==='aviso'?'badge-a':'badge-s';
-  const lbl=c.severidade==='erro'?'⛔ Erro':c.severidade==='aviso'?'⚠ Aviso':'💡 Sugestão';
-  return`<div class="badge ${cls}">${lbl}</div><div><span class="tag-c">${esc(c.camada)}</span></div>`;
+  const lbl=c.severidade==='erro'?'⛔ Erro':c.severidade==='aviso'?'⚠ Aviso':'💡 Sugest.';
+  const info=c.porque?`<span class="ii" data-w="${esc(c.porque)}">ⓘ</span>`:'';
+  return`<div class="badge ${cls}">${lbl}</div>
+    <div class="tag-row"><span class="tag-c">${esc(c.camada)}</span>${info}</div>`;
 }
 
 function renderAcao(c){
-  if(c.tipo==='contexto')return'<span class="st-na">sem ação</span>';
   const d=c.decisao;
-  if(d==='pular')return'<div class="st-pu">— Pulado</div>';
-  if(d&&d!=='pular')return'<div class="st-ap">✓ Aplicado</div>';
+  const ensinarBlk=`<div class="ensinar-wrap" id="ensinar-${c.id}">
+    <textarea class="ensinar-ta" id="ensinar-ta-${c.id}" placeholder="Ex.: linguagem informal intencional."></textarea>
+    <div class="ensinar-btns">
+      <button class="btn-en-cf" onclick="confirmarEnsinar('${c.id}')">✓ Enviar</button>
+      <button class="btn-en-ca" onclick="fecharEnsinar('${c.id}')">✕</button>
+    </div>
+  </div>`;
+  if(d==='pular')return`<div class="st-pu">— Pulado</div>
+    <button class="btn-ac btn-en" onclick="abrirEnsinar('${c.id}')">✦ Ensinar</button>${ensinarBlk}`;
+  if(d&&d!=='pular')return`<div class="st-ap">✓ Aplicado</div>
+    <button class="btn-ac btn-en" onclick="abrirEnsinar('${c.id}')">✦ Ensinar</button>${ensinarBlk}`;
   return`<div class="acao-wrap">
     <button class="btn-ac btn-ap" onclick="aplicar('${c.id}')">✓ Aplicar</button>
     <button class="btn-ac btn-ed" onclick="editar('${c.id}')">✎ Editar</button>
     <button class="btn-ac btn-pu" onclick="pular('${c.id}')">✕ Pular</button>
-  </div>`;
+    <button class="btn-ac btn-en" onclick="abrirEnsinar('${c.id}')">✦ Ensinar</button>
+  </div>${ensinarBlk}`;
 }
 
 function renderTudo(){
@@ -822,86 +986,97 @@ function renderTudo(){
   vb.className='verd-badge '+(v.includes('REPROV')||v.includes('BLOQ')?'verd-rep':
     v.includes('AJUSTE')||v.includes('AVISO')?'verd-ajuste':'verd-ok');
 
-  // Botão Continuar
   const btnCont=$id('btn-cont');
   if(m.proximo_titulo){
-    btnCont.style.display='';
-    btnCont.textContent=`→ ${m.proximo_titulo.slice(0,30)}`;
+    btnCont.style.display='';btnCont.textContent=`→ ${m.proximo_titulo.slice(0,30)}`;
   } else if(m.total>1){
-    btnCont.style.display='';
-    btnCont.textContent='✓ Concluir';
+    btnCont.style.display='';btnCont.textContent='✓ Concluir';
   } else {
     btnCont.style.display='none';
   }
 
   const tbody=$id('tbody');tbody.innerHTML='';
-  const bloq=cs.filter(c=>c.severidade==='erro'&&c.tipo!=='contexto');
-  const avis=cs.filter(c=>c.severidade==='aviso'&&c.tipo!=='contexto');
-  const sug=cs.filter(c=>c.severidade==='sugestao'&&c.tipo!=='contexto');
+  let num=1;
+
+  function addLeituraRow(texto,pi){
+    const tr=document.createElement('tr');
+    tr.id=`row-leitura-${pi}`;
+    tr.className='lr-row';
+    tr.setAttribute('data-tipo','leitura');
+    tr.innerHTML=`<td class="nc lr-n">§</td><td colspan="4" class="lr-texto">${esc(texto)}</td>`;
+    tbody.appendChild(tr);
+  }
 
   function addSec(label){
     const tr=document.createElement('tr');tr.className='sec-row';
-    const td=document.createElement('td');td.colSpan=7;td.textContent=label;
+    const td=document.createElement('td');td.colSpan=5;td.textContent=label;
     tr.appendChild(td);tbody.appendChild(tr);
   }
 
-  let num=1;
   function addRow(c){
-    const ctx=cs.filter(x=>x.tipo==='contexto'&&x.relacionado_a===c.id);
     const tr=document.createElement('tr');
     tr.id=`row-${c.id}`;
     tr.setAttribute('data-sev',c.severidade||'');
     tr.setAttribute('data-tipo',c.tipo||'correcao');
-    let rc=c.tipo==='contexto'?'rl':c.severidade==='erro'?'rb':c.severidade==='aviso'?'ra':'rs';
+    let rc=c.severidade==='erro'?'rb':c.severidade==='aviso'?'ra':'rs';
     if(c.decisao&&c.decisao!=='pular')rc+=' row-aprov';
     else if(c.decisao==='pular')rc+=' row-pulada';
-    if(!matchF(c))rc+=' row-hidden';
+    if(filtro!=='roteiro'&&!matchF(c))rc+=' row-hidden';
     tr.className=rc;
-
-    if(c.tipo==='contexto'){
-      tr.innerHTML=`<td class="nc">—</td><td><span class="tag-c">contexto</span></td>
-        <td colspan="4"><div class="tr-text" style="font-style:italic">${esc(c.trecho_original)}</div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--text-3);margin-top:4px">Parágrafo de contexto — sem correção</div></td>
-        <td><span class="st-na">sem ação</span></td>`;
-    } else {
-      const [antH,depH]=renderDiff(c);
-      tr.innerHTML=`<td class="nc">${num++}</td>
-        <td>${renderBadge(c)}</td>
-        <td><div class="tr-text">${esc(c.trecho_original)}</div></td>
-        <td>${antH}</td>
-        <td id="dep-${c.id}">${depH}</td>
-        <td><div class="jt">${esc(c.porque)}</div>${renderConf(c.confianca||0)}</td>
-        <td id="ac-${c.id}">${renderAcao(c)}</td>`;
-    }
+    const[antH,depH]=renderDiff(c);
+    tr.innerHTML=`<td class="nc">${num++}</td>
+      <td>${renderBadge(c)}</td>
+      <td id="ant-${c.id}">${antH}</td>
+      <td id="dep-${c.id}">${depH}</td>
+      <td id="ac-${c.id}">${renderAcao(c)}</td>`;
     tbody.appendChild(tr);
-    ctx.forEach(x=>{
-      const xtr=document.createElement('tr');
-      xtr.id=`row-${x.id}`;xtr.className='rl'+(matchF(x)?'':' row-hidden');
-      xtr.innerHTML=`<td class="nc">—</td><td><span class="tag-c">contexto</span></td>
-        <td colspan="4"><div class="tr-text">${esc(x.trecho_original)}</div></td>
-        <td><span class="st-na">sem ação</span></td>`;
-      tbody.appendChild(xtr);
-    });
   }
 
-  if(bloq.length){addSec('⛔  ERROS BLOQUEANTES');bloq.forEach(addRow)}
-  if(avis.length){addSec('⚠  AVISOS');avis.forEach(addRow)}
-  if(sug.length){addSec('💡  SUGESTÕES');sug.forEach(addRow)}
+  if(filtro==='roteiro'){
+    const paras=D.paragrafos||[];
+    const semTrecho=cs.filter(c=>c.tipo==='correcao'&&(c._para_idx===undefined||c._para_idx>=paras.length));
+    paras.forEach((texto,pi)=>{
+      const achados=cs.filter(c=>c.tipo==='correcao'&&c._para_idx===pi);
+      if(achados.length===0){
+        addLeituraRow(texto,pi);
+      } else {
+        achados.forEach(c=>addRow(c));
+      }
+    });
+    if(semTrecho.length){
+      addSec('Achados sem trecho identificado');
+      semTrecho.forEach(c=>addRow(c));
+    }
+  } else {
+    const bloq=cs.filter(c=>c.severidade==='erro'&&c.tipo!=='contexto');
+    const avis=cs.filter(c=>c.severidade==='aviso'&&c.tipo!=='contexto');
+    const sug=cs.filter(c=>c.severidade==='sugestao'&&c.tipo!=='contexto');
+    if(bloq.length){addSec('⛔  ERROS BLOQUEANTES');bloq.forEach(addRow)}
+    if(avis.length){addSec('⚠  AVISOS');avis.forEach(addRow)}
+    if(sug.length){addSec('💡  SUGESTÕES');sug.forEach(addRow)}
+    document.querySelectorAll('.sec-row').forEach(sr=>{
+      let nx=sr.nextElementSibling,vis=false;
+      while(nx&&!nx.classList.contains('sec-row')){
+        if(!nx.classList.contains('row-hidden')){vis=true;break}
+        nx=nx.nextElementSibling;
+      }
+      sr.style.display=vis?'':'none';
+    });
+  }
 
   atualizarFooter();
   aplicarFoco();
 }
 
-// ── Atalhos de teclado (J/K navegar · A aplicar · E editar · P pular) ────────
+// ── Teclado (J/K navegar · A aplicar · E editar · P pular) ──────────────────
 let focoId=null;
-function visIds(){
-  // só linhas de correção visíveis — ignora seções e contexto
-  return D.correcoes.filter(c=>{
-    if(c.tipo!=='correcao')return false;
-    const r=$id(`row-${c.id}`);
-    return r&&!r.classList.contains('row-hidden');
-  }).map(c=>c.id);
+
+function allVisRowIds(){
+  return [...document.querySelectorAll('#tbody tr[id]')]
+    .filter(r=>!r.classList.contains('row-hidden'))
+    .map(r=>r.id.replace('row-',''));
 }
+
 function aplicarFoco(){
   document.querySelectorAll('tr.row-focus').forEach(r=>r.classList.remove('row-focus'));
   if(!focoId)return;
@@ -911,25 +1086,40 @@ function aplicarFoco(){
     r.scrollIntoView({block:'center',behavior:'smooth'});
   }
 }
+
 function mover(d){
-  const ids=visIds();if(!ids.length)return;
+  const ids=allVisRowIds();if(!ids.length)return;
   let i=ids.indexOf(focoId);
   i=i<0?(d>0?0:ids.length-1):Math.min(ids.length-1,Math.max(0,i+d));
   focoId=ids[i];aplicarFoco();
 }
+
+function nextPendingAfter(id){
+  const ids=allVisRowIds();
+  let i=ids.indexOf(id);
+  for(let j=i+1;j<ids.length;j++){
+    if(ids[j].startsWith('leitura-'))continue;
+    const c=getC(ids[j]);
+    if(c&&!c.decisao)return ids[j];
+  }
+  return null;
+}
+
 document.addEventListener('keydown',e=>{
   const tag=(e.target.tagName||'').toLowerCase();
   if(tag==='textarea'||tag==='input'||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
+  const isCorr=focoId&&!focoId.startsWith('leitura-');
   if(k==='j'||e.key==='ArrowDown'){e.preventDefault();mover(1)}
   else if(k==='k'||e.key==='ArrowUp'){e.preventDefault();mover(-1)}
-  else if(k==='a'&&focoId){e.preventDefault();aplicar(focoId)}
-  else if(k==='e'&&focoId){e.preventDefault();editar(focoId)}
-  else if(k==='p'&&focoId){e.preventDefault();pular(focoId)}
+  else if(k==='a'&&isCorr){e.preventDefault();aplicar(focoId)}
+  else if(k==='e'&&isCorr){e.preventDefault();editar(focoId)}
+  else if(k==='p'&&isCorr){e.preventDefault();pular(focoId)}
 });
 
 // ── Filtro ────────────────────────────────────────────────────────────────────
 function matchF(c){
+  if(filtro==='roteiro')return true;
   if(filtro==='todos')return true;
   if(filtro==='bloqueantes')return c.severidade==='erro';
   if(filtro==='avisos')return c.severidade==='aviso';
@@ -943,26 +1133,12 @@ function setF(btn,f,activeClass){
   filtro=f;
   document.querySelectorAll('.fbtn').forEach(b=>b.className='fbtn');
   btn.className='fbtn '+(activeClass||'fa');
-  D.correcoes.forEach(c=>{
-    const r=$id(`row-${c.id}`);if(!r)return;
-    if(matchF(c))r.classList.remove('row-hidden');
-    else r.classList.add('row-hidden');
-  });
-  // Hide empty section rows
-  document.querySelectorAll('.sec-row').forEach(sr=>{
-    let nx=sr.nextElementSibling,vis=false;
-    while(nx&&!nx.classList.contains('sec-row')){
-      if(!nx.classList.contains('row-hidden')){vis=true;break}
-      nx=nx.nextElementSibling;
-    }
-    sr.style.display=vis?'':'none';
-  });
+  renderTudo();
 }
 
 // ── Ações ─────────────────────────────────────────────────────────────────────
 function getC(id){return D.correcoes.find(c=>c.id===id)}
 
-// Persiste a decisão no servidor a cada clique — fechar a aba não perde nada.
 function sync(id,motivo){
   const c=getC(id);if(!c)return;
   fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -973,13 +1149,34 @@ function aplicar(id){
   const c=getC(id);if(!c)return;
   c.decisao=c.correcao||'aplicado';
   salvar();sync(id);atualizarLinha(id);atualizarFooter();
+  const nx=nextPendingAfter(id);if(nx){focoId=nx;aplicarFoco();}
 }
 
 function pular(id){
   const c=getC(id);if(!c)return;
   c.decisao='pular';
-  const m=window.prompt('Motivo do pulo (opcional — Esc ignora):','');
-  salvar();sync(id,m||'');atualizarLinha(id);atualizarFooter();
+  salvar();sync(id,'');atualizarLinha(id);atualizarFooter();
+  const nx=nextPendingAfter(id);if(nx){focoId=nx;aplicarFoco();}
+}
+
+function abrirEnsinar(id){
+  const wrap=$id(`ensinar-${id}`);if(!wrap)return;
+  wrap.classList.toggle('aberto');
+  if(wrap.classList.contains('aberto')){const ta=$id(`ensinar-ta-${id}`);if(ta)ta.focus();}
+}
+
+function fecharEnsinar(id){
+  const wrap=$id(`ensinar-${id}`);if(wrap)wrap.classList.remove('aberto');
+  const ta=$id(`ensinar-ta-${id}`);if(ta)ta.value='';
+}
+
+function confirmarEnsinar(id){
+  const ta=$id(`ensinar-ta-${id}`);if(!ta)return;
+  const texto=ta.value.trim();if(!texto)return;
+  const c=getC(id);if(!c)return;
+  fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id,decisao:c.decisao||'ensinar',motivo:texto})}).catch(()=>{});
+  fecharEnsinar(id);toast('Ensinamento registrado');
 }
 
 function editar(id){
@@ -1006,6 +1203,7 @@ function conf(id){
   const novo=ta.value.trim();if(!novo)return;
   const c=getC(id);if(!c)return;
   c.decisao=novo;salvar();sync(id);atualizarLinha(id);atualizarFooter();
+  const nx=nextPendingAfter(id);if(nx){focoId=nx;aplicarFoco();}
 }
 
 function canc(id){atualizarLinha(id)}
@@ -1047,10 +1245,7 @@ function atualizarFooter(){
 
 // ── Gravar no Google Docs ─────────────────────────────────────────────────────
 async function gravar(){
-  if(!D.url_gdocs){
-    toast('Sem URL do Google Docs. Reinicie: python3 revisar.py --gdocs "URL"','e');
-    return;
-  }
+  if(!D.url_gdocs){toast('Sem URL do Google Docs. Reinicie: python3 revisar.py --gdocs "URL"','e');return;}
   const aprovadas=D.correcoes.filter(c=>c.tipo==='correcao'&&c.decisao&&c.decisao!=='pular')
     .map(c=>({trecho_original:c.trecho_original,decisao:c.decisao}));
   if(!aprovadas.length){toast('Nenhuma correção aprovada.','e');return}
@@ -1064,8 +1259,7 @@ async function gravar(){
       let msg=`✓ ${d.aplicadas} substituição(ões) gravada(s) no Google Docs`;
       if(d.avisos&&d.avisos.length)msg+=` · ⚠ ${d.avisos.join(' · ')}`;
       toast(msg,'s');
-    }
-    else toast(d.error||'Erro ao gravar','e');
+    } else toast(d.error||'Erro ao gravar','e');
   }catch(e){toast('Erro de conexão com o servidor local','e')}
   finally{
     btn.disabled=false;btn.textContent='Gravar no Google Docs';
@@ -1080,22 +1274,16 @@ async function continuar(){
   $id('loading-msg').textContent='Processando próximo roteiro...';
   loading.classList.add('show');
   try{
-    const r=await fetch('/api/continuar',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:'{}'});
+    const r=await fetch('/api/continuar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const d=await r.json();
     if(d.recarregar){
-      // Busca novos dados e re-renderiza
-      const r2=await fetch('/api/dados');
-      D=await r2.json();
+      const r2=await fetch('/api/dados');D=await r2.json();
       localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
-      carregar();
-      renderTudo();
-      window.scrollTo(0,0);
+      carregar();renderTudo();window.scrollTo(0,0);
       toast(`✓ ${D.roteiro.titulo.slice(0,40)}...`,'s');
     } else {
       toast('Revisão concluída! Pode fechar esta aba.','s');
-      $id('btn-cont').disabled=true;
-      $id('btn-cont').textContent='✓ Concluído';
+      $id('btn-cont').disabled=true;$id('btn-cont').textContent='✓ Concluído';
     }
   }catch(e){toast('Erro ao avançar para o próximo roteiro','e')}
   finally{loading.classList.remove('show')}
@@ -1105,8 +1293,7 @@ async function continuar(){
 function resetar(){
   if(!confirm('Resetar todas as decisões?'))return;
   D.correcoes.forEach(c=>{if(c.decisao!==null){c.decisao=null;sync(c.id)}});
-  localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
-  renderTudo();
+  localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);renderTudo();
 }
 
 function exportar(){
@@ -1115,20 +1302,37 @@ function exportar(){
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;
   a.download=`roteiro_${D.roteiro.id}_decisoes.json`;a.click();
-  URL.revokeObjectURL(url);
-  toast('JSON exportado!','s');
+  URL.revokeObjectURL(url);toast('JSON exportado!','s');
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
-let _tt=null;
+let _toastTimer=null;
 function toast(msg,tipo){
   const t=$id('toast');t.textContent=msg;
   t.className=(tipo==='s'?'ts':'te')+' show';
-  clearTimeout(_tt);_tt=setTimeout(()=>t.classList.remove('show'),3500);
+  clearTimeout(_toastTimer);_toastTimer=setTimeout(()=>t.classList.remove('show'),3500);
+}
+
+// ── Web Search Toggle ─────────────────────────────────────────────────────────
+let _wsAtivo=false;
+function _aplicarEstadoWS(ativo){
+  _wsAtivo=ativo;const el=$id('ws-toggle');if(!el)return;el.classList.toggle('on',ativo);
+}
+async function iniciarToggleWS(){
+  try{const r=await fetch('/api/config');const cfg=await r.json();_aplicarEstadoWS(!!(cfg.verificar_web));}
+  catch(e){_aplicarEstadoWS(false)}
+}
+async function toggleWebSearch(){
+  const novo=!_wsAtivo;_aplicarEstadoWS(novo);
+  try{
+    await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({verificar_web:novo})});
+    toast(novo?'Web search ativado para a próxima revisão':'Web search desativado','s');
+  }catch(e){_aplicarEstadoWS(!novo)}
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded',()=>{carregar();renderTudo()});
+window.addEventListener('DOMContentLoaded',()=>{carregar();renderTudo();iniciarToggleWS()});
 </script>
 </body>
 </html>"""
