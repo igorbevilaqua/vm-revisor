@@ -147,7 +147,7 @@ def _para_idx_de_achado(trecho: str, texto: str, para_offsets: list[int]) -> int
     return 0
 
 
-MAX_SEG_CHARS = 280  # ~3 linhas visuais por campo Antes/Depois
+MAX_SEG_CHARS = 220  # ~3 linhas visuais por campo Antes/Depois
 
 _SEV_ORD = {"erro": 0, "aviso": 1, "sugestao": 2}
 _NAT_ORD = {"objetivo": 0, "subjetivo": 1}
@@ -160,6 +160,66 @@ def _chave_prioridade(item):
         _NAT_ORD.get(item.get("natureza", "subjetivo"), 1),
         -(item.get("confianca") or 0),
     )
+
+
+def _frases_slices(s: str) -> list:
+    """Retorna as fatias (start, end) de cada frase de `s`, preservando o texto
+    literal (incluindo o espaçamento que segue a pontuação)."""
+    cortes = [0] + [m.end() for m in _re.finditer(r"[.!?…]+\s+", s)] + [len(s)]
+    return [(cortes[k], cortes[k + 1]) for k in range(len(cortes) - 1)
+            if s[cortes[k]:cortes[k + 1]].strip()]
+
+
+def _estreitar_achado(t: str, c: str):
+    """Divisão na origem: quando trecho_original e correcao compartilham frases
+    inalteradas no início e/ou no fim, estreita o achado para apenas as frases que
+    realmente mudaram. Um achado de parágrafo inteiro onde só uma frase foi alterada
+    vira um achado curto (cabe em 3 linhas), e o resto do parágrafo volta a ser
+    linha de leitura. As fatias são literais — o trecho estreitado continua
+    substituível no Google Doc."""
+    st, sc = _frases_slices(t), _frases_slices(c)
+    if len(st) < 2 or not sc:
+        return t, c
+    n = min(len(st), len(sc))
+    i = 0
+    while i < n and t[st[i][0]:st[i][1]].strip() == c[sc[i][0]:sc[i][1]].strip():
+        i += 1
+    j = 0
+    while j < n - i and (t[st[len(st)-1-j][0]:st[len(st)-1-j][1]].strip()
+                         == c[sc[len(sc)-1-j][0]:sc[len(sc)-1-j][1]].strip()):
+        j += 1
+    if i == 0 and j == 0:
+        return t, c  # nenhuma frase em comum nas pontas — diff é o trecho todo
+    ti, tj = i, len(st) - 1 - j  # faixa de frases alteradas em t
+    ci, cj = i, len(sc) - 1 - j  # faixa em c
+    if ti > tj and ci > cj:
+        # Conteúdo das frases idêntico, mas t != c: diff de espaçamento puro
+        # (ex.: PARAGRAFO_DENSO insere quebra de parágrafo). Estreita para o par
+        # de frases ao redor do ponto onde o espaçamento muda.
+        if t != c and len(st) == len(sc):
+            for k in range(len(st)):
+                if t[st[k][0]:st[k][1]] != c[sc[k][0]:sc[k][1]]:
+                    if k + 1 < len(st):
+                        nt = t[st[k][0]:st[k + 1][1]].strip()
+                        nc = c[sc[k][0]:sc[k + 1][1]].strip()
+                        if nt and nc and nt != nc:
+                            return nt, nc
+                    break
+        return t, c
+    if ti > tj or ci > cj:
+        # Inserção/remoção pura de frase: inclui uma frase-âncora inalterada para
+        # o trecho continuar substituível no Doc.
+        if i > 0:
+            ti, ci = ti - 1, ci - 1
+        else:
+            tj, cj = tj + 1, cj + 1
+        if ti > tj or tj >= len(st) or ci > cj or cj >= len(sc):
+            return t, c
+    nt = t[st[ti][0]:st[tj][1]].strip()
+    nc = c[sc[ci][0]:sc[cj][1]].strip()
+    if not nt or not nc or nt == nc:
+        return t, c
+    return nt, nc
 
 
 def _segmentar_paragrafo(par: str, trechos: list) -> list:
@@ -315,6 +375,13 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         if not t and not c:
             continue
         item = transformar_achado(a, i)
+        # Divisão na origem: estreita achados longos para as frases que mudaram
+        if item["trecho_original"] and item["correcao"]:
+            nt, nc = _estreitar_achado(item["trecho_original"], item["correcao"])
+            if nt != item["trecho_original"]:
+                item["trecho_original"] = nt
+                item["correcao"] = nc
+                item["diff_inline"] = _diff_inline(nt, nc)
         item["_para_idx"] = _para_idx_de_achado(item["trecho_original"], texto, para_offsets)
         itens.append(item)
 
@@ -828,10 +895,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
   pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,.45);
   white-space:pre-wrap;word-break:break-word}
 
-/* Diff blocks — max 3 linhas */
+/* Diff blocks — colapsa em 3 linhas, mas NUNCA esconde conteúdo sem controle:
+   quando o texto excede, o JS injeta o botão "ver tudo" (marcarOverflow) */
 .diff-blk{border-radius:4px;padding:6px 9px;font-family:var(--mono);font-size:12px;
   line-height:1.55;border:1px solid transparent;word-break:break-word;
   overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+.diff-blk.aberto{display:block;-webkit-line-clamp:initial;overflow:visible}
+.ver-mais{display:block;margin-top:3px;padding:1px 7px;border:1px solid var(--border);
+  border-radius:3px;background:transparent;color:var(--text-3);cursor:pointer;
+  font-family:var(--mono);font-size:10px;transition:all .15s}
+.ver-mais:hover{color:var(--text);border-color:var(--border-light)}
 .db-ant{background:var(--antes);border-color:rgba(255,69,69,.2);color:var(--antes-text)}
 .db-dep{background:var(--depois);border-color:rgba(0,201,127,.2);color:var(--depois-text)}
 .diff-null{color:var(--text-3);font-size:11px;font-style:italic;font-family:var(--mono)}
@@ -1202,7 +1275,34 @@ function renderTudo(){
 
   atualizarFooter();
   aplicarFoco();
+  marcarOverflow();
 }
+
+// ── Overflow dos blocos Antes/Depois ─────────────────────────────────────────
+// Conteúdo nunca fica inacessível: bloco que excede as 3 linhas do clamp ganha
+// um botão explícito "ver tudo" que expande a linha (sem corte silencioso).
+function marcarOverflow(){
+  document.querySelectorAll('#tbody .diff-blk').forEach(el=>{
+    const next=el.nextElementSibling;
+    const temBtn=next&&next.classList&&next.classList.contains('ver-mais');
+    if(el.classList.contains('aberto'))return;
+    if(el.scrollHeight>el.clientHeight+2){
+      if(!temBtn){
+        const b=document.createElement('button');
+        b.className='ver-mais';b.textContent='▾ ver tudo';
+        b.onclick=()=>{
+          const ab=el.classList.toggle('aberto');
+          b.textContent=ab?'▴ recolher':'▾ ver tudo';
+        };
+        el.after(b);
+      }
+    } else if(temBtn){next.remove()}
+  });
+}
+let _ovTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(_ovTimer);_ovTimer=setTimeout(marcarOverflow,150);
+});
 
 // ── Teclado (J/K navegar · A aplicar · E editar · P pular) ──────────────────
 let focoId=null;
@@ -1361,6 +1461,7 @@ function atualizarLinha(id){
     dep.innerHTML=renderDiff(mostrar)[1];
   }
   const ac=$id(`ac-${id}`);if(ac)ac.innerHTML=renderAcao(c);
+  marcarOverflow();
 }
 
 // ── Footer ────────────────────────────────────────────────────────────────────
