@@ -121,6 +121,9 @@ def _e_substituicao_direta(trecho: str, correcao: str) -> bool:
     Instrução editorial tem ratio de comprimento muito maior que a substituição."""
     if not trecho:
         return False
+    # Correção vazia = nota/conselho, nunca substituição (aplicar apagaria o trecho)
+    if not (correcao or "").strip():
+        return False
     # Se correcao for >3x o trecho E >150 chars, é quase certamente instrução editorial.
     if len(correcao) > max(150, 3 * len(trecho)):
         return False
@@ -159,6 +162,11 @@ def aplicar_correcoes(url, correcoes, interativo=True):
     for trecho_orig, novo_orig in correcoes:
         if not trecho_orig or not trecho_orig.strip():
             ignorados.append(f"sem trecho: «{novo_orig[:60]}»")
+            continue
+        # Trava: substituição vazia apagaria o trecho do doc. Deleção nunca é
+        # gerada automaticamente — só passaria aqui por bug ou dado corrompido.
+        if not (novo_orig or "").strip():
+            ignorados.append(f"correção vazia (apagaria o trecho): «{trecho_orig[:60]}»")
             continue
 
         # Minimiza ao segmento mínimo que ancora a mudança — menos riscado no doc.
@@ -295,7 +303,8 @@ def revisar_roteiro(roteiro, url):
                 print(f"   Depois: {negrito(correcao)}")
             else:
                 print(amarelo("   ⚠️  Sugestão editorial (não é substituição direta):"))
-                print(f"   {correcao}")
+                if correcao:
+                    print(f"   {correcao}")
 
             print(cinza(f"   Por quê: {porque}"))
 

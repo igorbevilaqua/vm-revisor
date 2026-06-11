@@ -135,6 +135,7 @@ EVIDÊNCIA DA WEB (resultado de busca real — use para classificar e cite a fon
 {self._formatar_roteiro(roteiro)}
 {bloco_web}
 Seja rigoroso — o público confia na VML para conteúdo preciso. Reporte cada afirmação
-incorreta ou imprecisa com o trecho literal e a correção factual. Sinalize com confiança
-baixa o que você não consegue confirmar com certeza (precisa de checagem manual)."""
+incorreta ou imprecisa com o trecho literal e a correção factual. Lembre da Opção B do
+seu protocolo: se você NÃO tem o dado correto confirmado, não reporte a afirmação —
+achado sem correção válida ocupa a atenção do editor sem oferecer solução."""
         return await self._rodar(self.system_prompt, user_prompt)

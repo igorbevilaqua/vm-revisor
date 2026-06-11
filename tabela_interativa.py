@@ -98,17 +98,23 @@ def transformar_achado(achado, idx):
     correcao = (achado.get("correcao") or "").strip()
     porque = (achado.get("porque") or "").strip()
 
-    # Segunda camada de defesa: se `correcao` ainda chegou como instrução editorial
-    # (agente ignorou o prompt), zera os dois campos e preserva a nota em `porque`.
-    # Achados com trecho="" e correcao="" são descartados em transformar_roteiro.
+    # Segunda camada de defesa: se `correcao` chegou como instrução editorial
+    # (agente ignorou o prompt), ela não é substituível — move a instrução para o
+    # `porque` e mantém o trecho como âncora. O achado vira NOTA (abaixo).
     if _correcao_e_instrucao(correcao):
-        porque = f"{porque} [Sugestão estrutural: {correcao}]".strip()
-        trecho = ""
+        porque = f"{porque} [Sugestão do agente: {correcao}]".strip()
         correcao = ""
+
+    # Tipo da linha:
+    #   correcao → Antes→Depois decidível (inclui inserções: sem trecho, com correção)
+    #   nota     → conselho sem texto substituto (com ou sem âncora no roteiro);
+    #              não entra no fluxo de decisão — vira sinal ✎ lateral na linha
+    #              do trecho (ou nota geral no topo). Ver marcarNotas() no front.
+    tipo = "correcao" if correcao else "nota"
 
     return {
         "id": f"c{idx:03d}",
-        "tipo": "correcao",
+        "tipo": tipo,
         "severidade": achado.get("severidade", "sugestao"),
         "natureza": achado.get("natureza", "subjetivo"),
         "camada": CAMADA_DISPLAY.get(achado.get("camada", ""), achado.get("camada", "")),
@@ -404,18 +410,28 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         offset = (idx if idx != -1 else offset) + len(p)
 
     itens = []
+    notas = []
     descartados = 0
     for i, a in enumerate(achados, 1):
         t = (a.get("trecho_original") or "").strip()
         c = (a.get("correcao") or "").strip()
-        if not t and not c:
+        p = (a.get("porque") or "").strip()
+        if not t and not c and not p:
             descartados += 1
             continue
         item = transformar_achado(a, i)
-        # A sanitização pode ter zerado os dois campos (correção era instrução
-        # editorial): sem trecho E sem correção não há nada para decidir — descarta.
-        if not item["trecho_original"] and not item["correcao"]:
-            descartados += 1
+        # NOTA (sem texto substituto): não entra no fluxo de decisão nem na
+        # consolidação — vai para a margem da linha do trecho (sinal ✎).
+        # Nota sem justificativa não tem o que mostrar — descarta.
+        if item["tipo"] == "nota":
+            if not item["porque"]:
+                descartados += 1
+                continue
+            item["_para_idx"] = (
+                _para_idx_de_achado(item["trecho_original"], texto, para_offsets)
+                if item["trecho_original"] else len(para_offsets)
+            )
+            notas.append(item)
             continue
         # INSERÇÃO (trecho vazio, correção com texto novo): ancora no parágrafo
         # vizinho do ponto de inserção. Vira uma substituição real — o Antes mostra
@@ -448,7 +464,7 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         item["_para_idx"] = _para_idx_de_achado(item["trecho_original"], texto, para_offsets)
         itens.append(item)
     if descartados:
-        print(f"   🧹 {descartados} achado(s) sem trecho e sem correção descartado(s) da tabela")
+        print(f"   🧹 {descartados} achado(s) sem conteúdo aproveitável descartado(s) da tabela")
 
     # ── Leitura sequencial: a tabela reproduz o roteiro do início ao fim ──────
     # `linhas` é o plano de renderização, na ordem original do texto:
@@ -465,7 +481,9 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         it["ids"] = [it["id"]]
         it["camadas"] = [it["camada"]]
         correcoes.append(it)
-        linhas.append({"tipo": "correcao", "id": it["id"]})
+        pi_it = it.get("_para_idx")
+        linhas.append({"tipo": "correcao", "id": it["id"],
+                       "pi": pi_it if (pi_it is not None and pi_it < n_par) else None})
 
     for pi, par in enumerate(paragrafos_raw):
         achs = [it for it in itens if it["_para_idx"] == pi]
@@ -473,7 +491,7 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         _ids_dentro = {id(a) for a in dentro}
         fora = [a for a in achs if id(a) not in _ids_dentro]
         if not dentro:
-            linhas.append({"tipo": "leitura", "texto": par})
+            linhas.append({"tipo": "leitura", "texto": par, "pi": pi})
         else:
             segs = _segmentar_paragrafo(par, [a["trecho_original"] for a in dentro])
             usados = set()
@@ -483,11 +501,11 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
                 for a in seg_achs:
                     usados.add(id(a))
                 if not seg_achs:
-                    linhas.append({"tipo": "leitura", "texto": seg})
+                    linhas.append({"tipo": "leitura", "texto": seg, "pi": pi})
                 else:
                     restantes, row = _consolidar_segmento(seg, seg_achs, pi)
                     correcoes.append(row)
-                    linhas.append({"tipo": "correcao", "id": row["id"]})
+                    linhas.append({"tipo": "correcao", "id": row["id"], "pi": pi})
                     # Complementares cuja fusão LLM falhou: linhas próprias logo
                     # após a consolidada — nunca somem silenciosamente.
                     for a in restantes:
@@ -502,6 +520,11 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
     finais = [it for it in itens if it["_para_idx"] >= n_par]
     for a in sorted(finais, key=_chave_prioridade):
         _linha_individual(a)
+
+    # Notas entram em `correcoes` (mesma fonte de dados: decisão/persistência/
+    # localStorage funcionam igual), mas NUNCA viram linha — o front as renderiza
+    # como sinal ✎ na margem da linha do trecho + painel lateral.
+    correcoes.extend(notas)
 
     veredicto = cons.get("veredicto", "—")
     return {
@@ -957,6 +980,53 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .verd-rep{background:var(--bloqueante-bg);border-color:var(--bloqueante-border);color:var(--bloqueante)}
 .verd-ajuste{background:var(--aviso-bg);border-color:var(--aviso-border);color:var(--aviso)}
 .verd-ok{background:var(--aprovado-bg);border-color:rgba(0,201,127,.3);color:var(--aprovado)}
+.chip-n{background:var(--surface-2);border-color:var(--border);color:var(--text-2);cursor:pointer;
+  transition:all .15s}
+.chip-n:hover{border-color:var(--aviso-border);color:var(--aviso)}
+.chip-n .dot{background:var(--aviso)}
+
+/* ── Notas (✎): sinal lateral discreto + painel ─── */
+.nota-mark{display:flex;align-items:center;justify-content:center;margin:5px auto 0;
+  width:20px;height:17px;border-radius:3px;cursor:pointer;
+  font-family:var(--mono);font-size:10px;font-weight:600;
+  color:var(--aviso);background:var(--aviso-bg);border:1px solid var(--aviso-border);
+  transition:all .15s;user-select:none}
+.nota-mark:hover{background:rgba(245,166,35,.2);transform:scale(1.1)}
+.nota-mark.nm-ok{color:var(--aprovado);background:var(--aprovado-bg);
+  border-color:rgba(0,201,127,.3)}
+
+#npanel{position:fixed;top:52px;right:-400px;bottom:64px;width:372px;z-index:150;
+  background:var(--surface);border-left:1px solid var(--border);
+  box-shadow:-14px 0 44px rgba(0,0,0,.5);display:flex;flex-direction:column;
+  transition:right .26s cubic-bezier(.22,1,.36,1)}
+#npanel.aberto{right:0}
+.np-head{display:flex;align-items:center;justify-content:space-between;
+  padding:13px 18px;border-bottom:1px solid var(--border);flex-shrink:0}
+.np-head .np-t{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--aviso);
+  text-transform:uppercase;letter-spacing:.08em}
+.np-close{background:transparent;border:1px solid var(--border);border-radius:4px;
+  color:var(--text-3);font-family:var(--mono);font-size:11px;padding:3px 9px;
+  cursor:pointer;transition:all .15s}
+.np-close:hover{color:var(--text);border-color:var(--border-light)}
+.np-body{flex:1;overflow-y:auto;padding:14px 18px;display:flex;
+  flex-direction:column;gap:12px}
+.np-card{background:var(--surface-2);border:1px solid var(--border);border-radius:7px;
+  padding:12px 14px;border-left:3px solid var(--aviso)}
+.np-card.np-decidida{border-left-color:var(--aprovado)}
+.np-meta{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.np-conf{font-family:var(--mono);font-size:9px;color:var(--text-3);margin-left:auto}
+.np-trecho{font-family:var(--mono);font-size:11px;color:var(--text-3);line-height:1.6;
+  border-left:2px solid var(--border-light);padding-left:9px;margin-bottom:8px;
+  word-break:break-word}
+.np-trecho.np-geral{font-style:italic;border-left-color:var(--aviso-border)}
+.np-porque{font-size:12px;color:var(--text);line-height:1.6;margin-bottom:10px;
+  white-space:pre-wrap;word-break:break-word}
+.np-acoes{display:flex;gap:6px}
+.np-acoes .btn-ac{width:auto;padding:5px 11px}
+.np-ok-msg{font-family:var(--mono);font-size:10.5px;color:var(--aprovado);line-height:1.5}
+.np-edit{margin-top:8px}
+.np-vazio{font-family:var(--mono);font-size:11px;color:var(--text-3);text-align:center;
+  padding:30px 0}
 
 /* ── Filtros ─── */
 #filtros{position:sticky;top:52px;z-index:99;background:var(--surface);
@@ -1177,6 +1247,7 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
     <div class="stat-chip chip-b" id="chip-b"><span class="dot"></span><span id="n-b">0</span> bloqueante(s)</div>
     <div class="stat-chip chip-a" id="chip-a"><span class="dot"></span><span id="n-a">0</span> aviso(s)</div>
     <div class="stat-chip chip-s" id="chip-s"><span class="dot"></span><span id="n-s">0</span> sugestão(ões)</div>
+    <div class="stat-chip chip-n" id="chip-n" style="display:none" onclick="abrirPainelNotas(null)" title="Notas dos agentes — observações sem correção automática"><span class="dot"></span>✎ <span id="n-n">0</span> nota(s)</div>
     <span class="verd-badge" id="verd-badge">—</span>
   </div>
 </div>
@@ -1227,6 +1298,12 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
 <div id="toast"></div>
 <div id="tt"></div>
 <div id="loading"><div class="spin"></div><div class="loading-msg" id="loading-msg">Aguarde...</div></div>
+
+<div id="npanel">
+  <div class="np-head"><span class="np-t" id="np-titulo">✎ Notas</span>
+    <button class="np-close" onclick="fecharPainelNotas()">✕ fechar</button></div>
+  <div class="np-body" id="np-body"></div>
+</div>
 
 <script>
 // ── Dados iniciais (embedded no primeiro load) ───────────────────────────────
@@ -1347,13 +1424,18 @@ function renderAcao(c){
 function renderTudo(){
   const r=D.roteiro,cs=D.correcoes,m=D.meta||{};
   $id('rot-nome').textContent=r.titulo;
-  const nb=cs.filter(c=>c.severidade==='erro').length;
-  const na=cs.filter(c=>c.severidade==='aviso').length;
-  const ns=cs.filter(c=>c.severidade==='sugestao').length;
+  // Notas (✎) não contam como correções: têm chip e fluxo próprios
+  const corr=cs.filter(c=>c.tipo!=='nota');
+  const notas=cs.filter(c=>c.tipo==='nota');
+  const nb=corr.filter(c=>c.severidade==='erro').length;
+  const na=corr.filter(c=>c.severidade==='aviso').length;
+  const ns=corr.filter(c=>c.severidade==='sugestao').length;
   $id('n-b').textContent=nb;$id('n-a').textContent=na;$id('n-s').textContent=ns;
   $id('chip-b').style.display=nb?'':'none';
   $id('chip-a').style.display=na?'':'none';
   $id('chip-s').style.display=ns?'':'none';
+  $id('n-n').textContent=notas.length;
+  $id('chip-n').style.display=notas.length?'':'none';
 
   const v=r.veredicto||'';
   const vb=$id('verd-badge');vb.textContent=v;
@@ -1426,9 +1508,9 @@ function renderTudo(){
       else{const c=getC(l.id);if(c)addRow(c);}
     });
   } else {
-    const bloq=cs.filter(c=>c.severidade==='erro'&&c.tipo!=='contexto');
-    const avis=cs.filter(c=>c.severidade==='aviso'&&c.tipo!=='contexto');
-    const sug=cs.filter(c=>c.severidade==='sugestao'&&c.tipo!=='contexto');
+    const bloq=cs.filter(c=>c.severidade==='erro'&&c.tipo==='correcao');
+    const avis=cs.filter(c=>c.severidade==='aviso'&&c.tipo==='correcao');
+    const sug=cs.filter(c=>c.severidade==='sugestao'&&c.tipo==='correcao');
     if(bloq.length){addSec('⛔  ERROS BLOQUEANTES');bloq.forEach(addRow)}
     if(avis.length){addSec('⚠  AVISOS');avis.forEach(addRow)}
     if(sug.length){addSec('💡  SUGESTÕES');sug.forEach(addRow)}
@@ -1442,9 +1524,132 @@ function renderTudo(){
     });
   }
 
+  if(filtro==='roteiro')marcarNotas();
   atualizarFooter();
   aplicarFoco();
   marcarOverflow();
+}
+
+// ── Notas (✎): sinal lateral + painel ────────────────────────────────────────
+// Nota = conselho do agente sem texto substituto. Nunca vira linha da tabela:
+// aparece como um ✎ discreto na 1ª coluna da linha que contém o trecho.
+// Hover = preview (tooltip). Clique = painel lateral com citação + justificativa
+// + ação opcional de transformar em correção (o revisor escreve o substituto).
+let _npIds=null; // ids exibidos no painel aberto (null = todas)
+
+function marcarNotas(){
+  const notas=D.correcoes.filter(c=>c.tipo==='nota');
+  if(!notas.length)return;
+  const porLinha=new Map(); // rowEl → [notas]
+  notas.forEach(n=>{
+    let alvo=null;
+    const L=D.linhas||[];
+    // 1º: linha cujo texto contém o trecho da nota
+    if(n.trecho_original){
+      for(let li=0;li<L.length&&!alvo;li++){
+        const l=L[li];
+        const txt=l.tipo==='leitura'?(l.texto||''):((getC(l.id)||{}).trecho_original||'');
+        if(txt&&txt.includes(n.trecho_original))alvo=rowDe(l,li);
+      }
+    }
+    // 2º: primeira linha do mesmo parágrafo
+    if(!alvo&&n._para_idx!=null){
+      for(let li=0;li<L.length&&!alvo;li++){
+        if(L[li].pi===n._para_idx)alvo=rowDe(L[li],li);
+      }
+    }
+    // 3º: sem âncora — acessível pelo chip ✎ do topo
+    if(alvo){
+      if(!porLinha.has(alvo))porLinha.set(alvo,[]);
+      porLinha.get(alvo).push(n);
+    }
+  });
+  porLinha.forEach((ns,tr)=>{
+    const td=tr.querySelector('td');if(!td)return;
+    const decididas=ns.every(n=>n.decisao&&n.decisao!=='pular');
+    const m=document.createElement('div');
+    m.className='nota-mark'+(decididas?' nm-ok':'');
+    m.textContent='✎'+(ns.length>1?ns.length:'');
+    m.setAttribute('data-w',ns.map(n=>`[${n.camada}] ${n.porque}`).join('\n\n').slice(0,420));
+    m.onclick=e=>{e.stopPropagation();abrirPainelNotas(ns.map(n=>n.id));};
+    td.appendChild(m);
+  });
+}
+
+function rowDe(l,li){
+  return l.tipo==='leitura'?$id(`row-leitura-${li}`):$id(`row-${l.id}`);
+}
+
+function abrirPainelNotas(ids){
+  _npIds=ids;
+  const todas=D.correcoes.filter(c=>c.tipo==='nota');
+  const notas=ids?ids.map(getC).filter(Boolean):todas;
+  $id('np-titulo').textContent=`✎ ${notas.length} nota(s) dos agentes`;
+  $id('np-body').innerHTML=notas.map(cardNota).join('')
+    ||'<div class="np-vazio">Sem notas neste roteiro.</div>';
+  $id('npanel').classList.add('aberto');
+}
+
+function fecharPainelNotas(){$id('npanel').classList.remove('aberto');_npIds=null;}
+
+function cardNota(n){
+  const decidida=n.decisao&&n.decisao!=='pular';
+  const trecho=n.trecho_original
+    ?`<div class="np-trecho">“${esc(n.trecho_original)}”</div>`
+    :'<div class="np-trecho np-geral">Nota geral — sem trecho específico</div>';
+  const acoes=decidida
+    ?`<div class="np-ok-msg">✓ Transformada em correção — entra no Gravar:<br>«${esc(n.decisao.slice(0,90))}»</div>`
+    :((n.trecho_original?`<button class="btn-ac btn-ed" onclick="npEditar('${n.id}')">✎ Transformar em correção</button>`:'')
+      +`<button class="btn-ac btn-en" onclick="npEnsinar('${n.id}')">✦ Ensinar</button>`);
+  return `<div class="np-card${decidida?' np-decidida':''}" id="npc-${n.id}">
+    <div class="np-meta"><span class="tag-c">${esc(n.camada)}</span>
+      <span class="np-conf">${n.confianca||0}%</span></div>
+    ${trecho}
+    <div class="np-porque">${esc(n.porque)}</div>
+    <div class="np-acoes">${acoes}</div>
+    <div class="np-edit" id="np-edit-${n.id}"></div>
+  </div>`;
+}
+
+function npEditar(id){
+  const c=getC(id);if(!c)return;
+  const box=$id(`np-edit-${id}`);if(!box)return;
+  box.innerHTML=`<textarea class="edit-ta" id="np-ta-${id}">${esc(c.trecho_original)}</textarea>
+    <div class="ensinar-btns">
+      <button class="btn-en-cf" onclick="npConf('${id}')">✓ Confirmar</button>
+      <button class="btn-en-ca" onclick="npCanc('${id}')">✕</button></div>`;
+  const ta=$id(`np-ta-${id}`);ta.focus();ta.select();
+}
+
+function npConf(id){
+  const ta=$id(`np-ta-${id}`);if(!ta)return;
+  const novo=ta.value.trim();
+  const c=getC(id);if(!c)return;
+  if(!novo||novo===c.trecho_original){npCanc(id);return;}
+  c.decisao=novo;salvar();sync(id);
+  toast('Nota transformada em correção — entra no Gravar');
+  renderTudo();abrirPainelNotas(_npIds);
+}
+
+function npCanc(id){const box=$id(`np-edit-${id}`);if(box)box.innerHTML='';}
+
+function npEnsinar(id){
+  const c=getC(id);if(!c)return;
+  const box=$id(`np-edit-${id}`);if(!box)return;
+  box.innerHTML=`<textarea class="ensinar-ta" id="np-ta-${id}" placeholder="Ex.: esse tipo de observação não se aplica a este cliente."></textarea>
+    <div class="ensinar-btns">
+      <button class="btn-en-cf" onclick="npEnsinarConf('${id}')">✓ Enviar</button>
+      <button class="btn-en-ca" onclick="npCanc('${id}')">✕</button></div>`;
+  $id(`np-ta-${id}`).focus();
+}
+
+function npEnsinarConf(id){
+  const ta=$id(`np-ta-${id}`);if(!ta)return;
+  const texto=ta.value.trim();if(!texto)return;
+  const c=getC(id);if(!c)return;
+  fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id,decisao:c.decisao||'ensinar',motivo:texto})}).catch(()=>{});
+  npCanc(id);toast('Ensinamento registrado');
 }
 
 // ── Overflow dos blocos Antes/Depois ─────────────────────────────────────────
@@ -1513,6 +1718,7 @@ function nextPendingAfter(id){
 document.addEventListener('keydown',e=>{
   const tag=(e.target.tagName||'').toLowerCase();
   if(tag==='textarea'||tag==='input'||e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.key==='Escape'){fecharPainelNotas();return;}
   const k=e.key.toLowerCase();
   const isCorr=focoId&&!focoId.startsWith('leitura-');
   if(k==='j'||e.key==='ArrowDown'){e.preventDefault();mover(1)}
@@ -1655,7 +1861,9 @@ function atualizarFooter(){
 // ── Gravar no Google Docs ─────────────────────────────────────────────────────
 async function gravar(){
   if(!D.url_gdocs){toast('Sem URL do Google Docs. Reinicie: python3 revisar.py --gdocs "URL"','e');return;}
-  const aprovadas=D.correcoes.filter(c=>c.tipo==='correcao'&&c.decisao&&c.decisao!=='pular')
+  // Inclui notas transformadas em correção pelo revisor (decisao = texto escrito)
+  const aprovadas=D.correcoes.filter(c=>(c.tipo==='correcao'||c.tipo==='nota')
+      &&c.decisao&&c.decisao!=='pular'&&c.trecho_original)
     .map(c=>({trecho_original:c.trecho_original,decisao:c.decisao}));
   if(!aprovadas.length){toast('Nenhuma correção aprovada.','e');return}
   const btn=$id('btn-gravar');btn.disabled=true;btn.textContent='Gravando...';
