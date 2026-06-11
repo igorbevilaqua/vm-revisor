@@ -54,6 +54,7 @@ class Revisao:
     def __init__(self):
         self._lock = threading.Lock()
         self.proc = None
+        self.url_interface = ""   # URL deste launcher (botão ⟳ Nova Revisão na tabela)
         self.reset()
 
     def reset(self):
@@ -74,7 +75,16 @@ class Revisao:
     def iniciar(self, url: str):
         with self._lock:
             if self.rodando():
-                return False, "Já existe uma revisão em andamento."
+                if not self.tabela_url:
+                    return False, "Já existe uma revisão em andamento."
+                # Sessão anterior já entregou a tabela (usuário pediu Nova
+                # Revisão): encerra o pipeline antigo para liberar a porta.
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait()
             self.reset()
             self.url_gdocs = url
             self.fase = "iniciando"
@@ -84,6 +94,8 @@ class Revisao:
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["VML_LAUNCHER"] = "1"   # tabela_interativa não abre 2ª aba — nós redirecionamos
+        if self.url_interface:
+            env["VML_LAUNCHER_URL"] = self.url_interface  # botão ⟳ Nova Revisão na tabela
 
         self.proc = subprocess.Popen(
             [sys.executable, "-u", str(RAIZ / "revisar.py"),
@@ -93,14 +105,14 @@ class Revisao:
             # stdin herdado do terminal: o loop de aprendizado (s/n) do final
             # continua respondível na janela do .bat/.command.
         )
-        threading.Thread(target=self._ler_saida, daemon=True).start()
+        threading.Thread(target=self._ler_saida, args=(self.proc,), daemon=True).start()
         return True, ""
 
-    def _ler_saida(self):
+    def _ler_saida(self, proc):
         """Lê a saída do pipeline conforme chega, espelha no terminal e alimenta o parser.
         os.read devolve o que estiver disponível — prompts sem \n (ex.: o [s/n] do
         loop de aprendizado) aparecem no terminal imediatamente."""
-        fd = self.proc.stdout.fileno()
+        fd = proc.stdout.fileno()
         buf = b""
         while True:
             try:
@@ -109,6 +121,8 @@ class Revisao:
                 break
             if not chunk:
                 break
+            if self.proc is not proc:
+                return   # sessão substituída por uma Nova Revisão: parar de alimentar o estado
             self._tee(chunk)
             buf += chunk
             while b"\n" in buf:
@@ -116,11 +130,13 @@ class Revisao:
                 self._processar_linha(linha.decode("utf-8", "replace"))
             if len(buf) > 16384:   # linha anormalmente longa: só para o parser
                 buf = b""
-        if buf:
+        if buf and self.proc is proc:
             self._processar_linha(buf.decode("utf-8", "replace"))
 
-        codigo = self.proc.wait()
+        codigo = proc.wait()
         with self._lock:
+            if self.proc is not proc:
+                return   # estado já pertence à nova revisão
             if self.fase not in ("pronto",) or codigo != 0:
                 if codigo != 0 and not self.tabela_url:
                     self.fase = "erro"
@@ -273,6 +289,7 @@ def main():
 
     porta = _porta_livre()
     url = f"http://localhost:{porta}"
+    REVISAO.url_interface = url
     print("═" * 56)
     print("  REVISOR DE ROTEIROS — Viral Media Labs")
     print("═" * 56)
@@ -560,7 +577,10 @@ $('ag-sec').innerHTML=AGENTES.map(a=>
   `<div class="passo" data-ag="${a.k}"><span class="st"><span class="dot"></span></span>
    <span class="nome">${a.n}</span><span class="extra" id="ex-${a.k}">${a.d}</span></div>`).join('');
 
-let polling=null, redirecionando=false;
+// ?nova=1 — usuário voltou da tabela pelo botão ⟳ Nova Revisão: mostrar o
+// formulário limpo em vez de redirecionar de volta à tabela da sessão anterior.
+const NOVA=new URLSearchParams(location.search).has('nova');
+let polling=null, redirecionando=false, iniciadaNestaPagina=false;
 
 async function iniciar(){
   const url=$('url').value.trim(), err=$('form-erro');
@@ -576,6 +596,7 @@ async function iniciar(){
     const j=await r.json();
     if(!r.ok){err.textContent=j.error||'Erro ao iniciar.';err.classList.add('show');
       $('btn-go').disabled=false;return;}
+    iniciadaNestaPagina=true;redirecionando=false;
     mostrarProgresso();
   }catch(e){
     err.textContent='Servidor local indisponível. Verifique a janela do terminal.';
@@ -650,7 +671,9 @@ async function poll(){
   lb.scrollTop=lb.scrollHeight;
 
   // Final: redirect para a Tabela Interativa
-  if(s.fase==='pronto'&&s.tabela_url&&!redirecionando){
+  // (com ?nova=1, só redireciona se a revisão foi iniciada nesta página —
+  //  a tabela 'pronta' da sessão anterior não deve puxar o usuário de volta)
+  if(s.fase==='pronto'&&s.tabela_url&&!redirecionando&&(!NOVA||iniciadaNestaPagina)){
     redirecionando=true;clearInterval(polling);
     const b=$('banner');b.className='final-banner ok show';
     b.innerHTML='✓ Análise concluída — abrindo a Tabela Interativa…';
@@ -665,9 +688,12 @@ async function poll(){
 }
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-// Se já existe revisão em andamento (reload da página), retoma a tela de progresso
+// Se já existe revisão em andamento (reload da página), retoma a tela de progresso.
+// Exceção: ?nova=1 com tabela já servida — o usuário voltou para revisar outro Doc.
 fetch('/api/status').then(r=>r.json()).then(s=>{
-  if(s.fase&&s.fase!=='ocioso'&&s.fase!=='encerrado')mostrarProgresso();
+  const servida=s.fase==='pronto'&&s.tabela_url;
+  if(NOVA&&servida)return;
+  if(s.fase&&s.fase!=='ocioso'&&s.fase!=='encerrado'){iniciadaNestaPagina=true;mostrarProgresso();}
 });
 </script>
 </body>

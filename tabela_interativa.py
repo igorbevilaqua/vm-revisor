@@ -530,6 +530,7 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
     return {
         "roteiro": {
             "titulo": roteiro_raw.get("titulo", "Roteiro"),
+            "cliente": roteiro_raw.get("cliente") or "",
             "id": f"rot_{roteiro_raw.get('numero', 1):02d}",
             "veredicto": veredicto,
             "score_geral": cons.get("nota_geral", 0),
@@ -656,7 +657,9 @@ class TabelaServer:
             html = _HTML.replace(
                 "__DADOS_JSON__",
                 json.dumps(server.dados_atual, ensure_ascii=False)
-            ).replace("__SESSAO_ID__", server.sessao_id)
+            ).replace("__SESSAO_ID__", server.sessao_id
+            ).replace("__LAUNCHER_URL__",
+                      os.environ.get("VML_LAUNCHER_URL", ""))
             return Response(html, mimetype="text/html; charset=utf-8")
 
         @app.route("/api/dados")
@@ -967,6 +970,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .roteiro-badge{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;
   padding:3px 10px;font-size:12px;color:var(--text);max-width:340px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cliente-badge{border:1px solid var(--border);border-radius:4px;
+  padding:3px 10px;font-size:11px;color:var(--text-2);text-transform:uppercase;
+  letter-spacing:.06em;max-width:200px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topbar-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .stat-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;
   border-radius:4px;font-family:var(--mono);font-size:11px;font-weight:600;
@@ -1242,6 +1249,7 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
     <span class="topbar-brand">VML — REVISOR</span>
     <span class="topbar-sep">/</span>
     <span class="roteiro-badge" id="rot-nome">—</span>
+    <span class="cliente-badge" id="rot-cliente" title="Cliente" style="display:none"></span>
   </div>
   <div class="topbar-right">
     <div class="stat-chip chip-b" id="chip-b"><span class="dot"></span><span id="n-b">0</span> bloqueante(s)</div>
@@ -1287,6 +1295,7 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
   <div class="footer-l"><span class="naplic" id="n-ap">0</span> de <span id="n-tot">0</span> aplicadas<span class="kbd-legend">J/K navegar · A aplicar · E editar · P pular</span></div>
   <div class="footer-c" id="footer-st">—</div>
   <div class="footer-r">
+    <button class="btn-sec" id="btn-nova" onclick="novaRevisao()" style="display:none">⟳ Nova Revisão</button>
     <button class="btn-sec" onclick="resetar()">Resetar</button>
     <button class="btn-sec" onclick="exportar()">Exportar JSON</button>
     <button class="btn-gravar" id="btn-gravar" onclick="gravar()" disabled>Gravar no Google Docs</button>
@@ -1309,6 +1318,8 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
 // ── Dados iniciais (embedded no primeiro load) ───────────────────────────────
 let D = __DADOS_JSON__;
 const SESSAO = '__SESSAO_ID__';
+// URL do launcher (interface.py) — vazio quando rodando sem a interface gráfica
+const LAUNCHER = '__LAUNCHER_URL__';
 let filtro = 'roteiro';
 
 // ── Tooltip flutuante ────────────────────────────────────────────────────────
@@ -1424,6 +1435,9 @@ function renderAcao(c){
 function renderTudo(){
   const r=D.roteiro,cs=D.correcoes,m=D.meta||{};
   $id('rot-nome').textContent=r.titulo;
+  const cli=$id('rot-cliente');
+  if(r.cliente){cli.textContent=r.cliente;cli.style.display=''}
+  else cli.style.display='none';
   // Notas (✎) não contam como correções: têm chip e fluxo próprios
   const corr=cs.filter(c=>c.tipo!=='nota');
   const notas=cs.filter(c=>c.tipo==='nota');
@@ -1928,6 +1942,14 @@ async function continuar(){
   finally{loading.classList.remove('show')}
 }
 
+// ── Nova Revisão (volta ao launcher para revisar outro Doc) ───────────────────
+function novaRevisao(){
+  const pend=D.correcoes.filter(c=>c.tipo==='correcao'&&!c.decisao).length;
+  if(pend>0&&!confirm(`${pend} achado(s) ainda sem decisão neste roteiro. `+
+    `As decisões já tomadas estão salvas. Iniciar uma nova revisão mesmo assim?`))return;
+  window.location.href=LAUNCHER+'/?nova=1';
+}
+
 // ── Resetar / Exportar ────────────────────────────────────────────────────────
 function resetar(){
   if(!confirm('Resetar todas as decisões?'))return;
@@ -1953,7 +1975,10 @@ function toast(msg,tipo){
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded',()=>{carregar();renderTudo()});
+window.addEventListener('DOMContentLoaded',()=>{
+  carregar();renderTudo();
+  if(LAUNCHER)$id('btn-nova').style.display='';
+});
 </script>
 </body>
 </html>"""
