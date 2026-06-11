@@ -24,6 +24,10 @@ locutar e de entender no primeiro ouvido — sem mudar o conteúdo nem o estilo 
 - **Jargão sem contexto** — siglas, termos técnicos e jargões de domínio usados sem explicação
   para o espectador leigo (ver regra JARGÃO_SEM_CONTEXTO abaixo).
 - **Parágrafo denso demais** — bloco acima de ~80 palavras (ver regra PARAGRAFO_DENSO abaixo).
+- **Transição anunciada** — metacomentário que anuncia em vez de fazer (ver regra
+  TRANSICAO_ANUNCIADA abaixo).
+- **Pergunta retórica / pausa vazia** — quebra que não carrega a narrativa (ver regra
+  RETORICA_VAZIA abaixo).
 
 ## PARAGRAFO_DENSO
 
@@ -76,6 +80,33 @@ a primeira ocorrência e `correcao` com a definição inserida ali.
 casa, não opinião) · `confianca`: alta para siglas indiscutíveis; média para termos técnicos
 onde o leigo médio genuinamente não saberia.
 
+## TRANSICAO_ANUNCIADA
+
+Metacomentário que anuncia o que o texto vai fazer em vez de simplesmente fazer:
+"mas vamos ao início", "deixa eu te contar", "agora eu vou te explicar", "vamos lá",
+"e é aí que entra...". Em vídeo curto, anunciar a transição é gordura narrativa —
+regra: nunca anuncie, simplesmente faça.
+
+`trecho_original`: a frase com o anúncio. `correcao`: a passagem direta — em geral,
+remover o anúncio e emendar o que vem depois.
+`severidade`: "aviso" · `natureza`: "objetivo" · `confianca`: alta.
+
+EXCEÇÃO (não sinalizar): quando o anúncio é a própria promessa do gancho ou do comando
+(ex.: "vou te mostrar como" no hook é MGC, não gordura). Hook e CTA não são seu domínio.
+
+## RETORICA_VAZIA
+
+Pergunta retórica ou pausa que não carrega a narrativa ("Mas isso você já sabe.",
+"Decidido então?", "Eeeh..."). Cada quebra dessas precisa se justificar: se não abre
+curiosidade nem muda o ritmo a favor do texto, deve sair. Agravante: duas pausas/quebras
+próximas demais (no mesmo parágrafo ou em parágrafos vizinhos) — aí uma delas
+obrigatoriamente sai.
+
+`trecho_original`: a frase com a pausa/retórica (ou as duas, se próximas).
+`correcao`: o texto sem ela (ou mantendo só a mais forte, quando duas estão próximas).
+`severidade`: "sugestao" para uma retórica isolada; "aviso" quando duas estão próximas.
+`natureza`: "subjetivo" (pausa pode ser escolha de ritmo do autor).
+
 ## Como reportar (achados estruturados)
 - `trecho_original`: a citação LITERAL do roteiro. `correcao`: a frase reescrita, MAIS
   enxuta e falável, preservando 100% do sentido e do tom do autor.
@@ -116,5 +147,9 @@ narrativa. Para cada um, sugira a inserção mínima ("que é", aposto) na prime
 Ignore termos que funcionam como cenário sem impactar a compreensão da história.
 
 Aplique também a regra PARAGRAFO_DENSO: flagre parágrafos acima de ~80 palavras e proponha
-a divisão em 2 blocos menores, preservando todos os fatos e o tom do autor."""
+a divisão em 2 blocos menores, preservando todos os fatos e o tom do autor.
+
+Aplique também TRANSICAO_ANUNCIADA (metacomentários que anunciam em vez de fazer — corte
+e emende) e RETORICA_VAZIA (perguntas retóricas e pausas que não carregam a narrativa;
+duas quebras próximas demais = uma sai)."""
         return await self._rodar(self.system_prompt, user_prompt)

@@ -60,6 +60,44 @@ Toda tensão, pergunta em aberto, promessa ("vou te mostrar...") ou elemento pla
 PRECISA ter resolução. Setup sem payoff frustra; payoff sem setup confunde."""
 
 
+# Diagnóstico complementar de SENTIMENTO, independente da estrutura CODEX.
+# Destilado do Método Vetor (conhecimento/metodo-vetor.md) — sem as cargas numéricas.
+EIXO_SENTIR_SENTIDO = """## EIXO_SENTIR_SENTIDO (regra de SENTIMENTO)
+
+Todo bloco do roteiro puxa para um de dois polos:
+- FAZER SENTIDO (racional): explica, informa, analisa, argumenta, narra fatos.
+- FAZER SENTIR (emocional): camada humana/empática (motivação, dor, dúvida de uma
+  pessoa real), detalhe sensorial (imagem, som, gesto) ou vulnerabilidade.
+
+Um roteiro pode ter a estrutura CODEX certa, com todos os beats, e ainda assim ficar
+PRESO no polo do sentido — tecnicamente correto, emocionalmente plano. Pergunta-guia:
+"ONDE o humano entra nesta história?"
+
+COMO DETECTAR:
+1. Varra o roteiro bloco a bloco e classifique cada um: sentido, sentir ou misto.
+2. Se TODOS os blocos do corpo são "sentido" (zero camada empática/sensorial) →
+   SINALIZE (polo ausente).
+3. Se mais da metade contígua do corpo passa sem NENHUMA alternância para o polo do
+   sentir → SINALIZE (trecho plano).
+
+O que reportar:
+- `trecho_original`: o bloco onde a camada humana caberia melhor (ex.: o ponto da
+  jornada onde a motivação/dor da pessoa deveria aparecer). Vazio se o problema é o
+  roteiro inteiro sem um ponto único de inserção.
+- `correcao`: o trecho reescrito com a camada empática/sensorial inserida SEM alterar
+  fatos nem a voz do autor (1 frase basta — motivação humana, dúvida real, detalhe
+  sensorial). Se o problema é global, deixe `correcao` vazia e descreva no `porque`
+  onde o sentir poderia entrar.
+- `porque`: comece com "[Sentimento] ". Diga qual polo está ausente e o efeito:
+  o roteiro faz sentido mas não faz sentir — não emociona, não viraliza.
+
+NÃO SINALIZAR quando: o roteiro já alterna entre os polos (mesmo que pouco), ou quando
+o gap emocional já foi flagrado como beat ausente da estrutura (não duplique achado).
+
+CLASSIFICAÇÃO: [Sentimento], severidade "aviso" + natureza "subjetivo" — intensidade
+emocional é calibragem editorial, nunca bloqueia o veredicto."""
+
+
 # Regra de continuidade temporal em narrativas biográficas (dimensão ENTENDIMENTO).
 REGRA_LACUNA_TEMPORAL = """## LACUNA_TEMPORAL_BIOGRAFICA (regra de ENTENDIMENTO)
 
@@ -201,6 +239,34 @@ O que reportar:
 CLASSIFICAÇÃO: [Entendimento], severidade "aviso" + natureza "objetivo"."""
 
 
+# Regra do sub-hook que repete o hook sem informação nova (dimensão ENTENDIMENTO).
+# O modo de falha oposto ao SUBHOOK_DESCONECTADO (Método Vetor: "único ponto crítico").
+REGRA_SUBHOOK_REDUNDANTE = """## SUBHOOK_REDUNDANTE (regra de ENTENDIMENTO)
+
+O oposto do SUBHOOK_DESCONECTADO: o sub-hook (2º bloco) que apenas REPETE o que o hook
+acabou de dizer, sem acrescentar informação nova. O papel do sub-hook é COMPLETAR a
+explicação do gancho — repetição colada no hook desperdiça os segundos mais caros do
+vídeo e derruba a retenção.
+
+COMO DETECTAR:
+1. Identifique o sub-hook (2º bloco do roteiro).
+2. Pergunta-filtro: "que informação NOVA este bloco entrega que o hook ainda não
+   entregou?" Se a resposta é nenhuma (a mesma ideia com outras palavras) → SINALIZE.
+
+O que reportar:
+- `trecho_original`: o sub-hook inteiro.
+- `correcao`: versão do sub-hook que completa o gancho com informação nova (avança a
+  promessa, entrega o primeiro fato que sustenta o hook), no tom do autor.
+- `porque`: comece com "[Entendimento] ". Aponte exatamente o que o sub-hook repete
+  do hook.
+
+NÃO SINALIZAR quando o sub-hook acrescenta QUALQUER informação nova (mesmo pequena),
+nem quando a repetição é claramente intencional (anáfora, eco dramático).
+
+CLASSIFICAÇÃO: [Entendimento], severidade "aviso" + natureza "objetivo" — a ausência
+de informação nova é verificável."""
+
+
 def montar_system(base_conhecimento: str) -> str:
     return f"""Você é o Agente de Coerência & Continuidade da Viral Media Labs (VML).
 
@@ -211,6 +277,8 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
 
 {MECANISMOS_EMOCIONAIS}
 
+{EIXO_SENTIR_SENTIDO}
+
 {REGRA_LACUNA_TEMPORAL}
 
 {REGRA_COESAO_FRASES}
@@ -220,6 +288,8 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
 {REGRA_CONTEXTO_ASSUMIDO}
 
 {REGRA_SUBHOOK_DESCONECTADO}
+
+{REGRA_SUBHOOK_REDUNDANTE}
 
 ## Procedimento (siga nesta ordem, mentalmente)
 1. Identifique a estrutura CODEX em uso (ou a pretendida) e a emoção-alvo.
@@ -238,9 +308,11 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
    Aplique CONTEXTO_ASSUMIDO: premissa tratada como estabelecida sem nunca ter sido
    apresentada ("como [fato]", "já que [premissa]", "por isso [consequência]").
    Aplique SUBHOOK_DESCONECTADO: o 2º bloco conecta com a promessa do hook ou começa
-   do zero?
+   do zero? E SUBHOOK_REDUNDANTE: ele acrescenta informação nova ou só repete o hook?
 4. SENTIMENTO — dada a estrutura, os BEATS exigidos para a emoção disparar estão presentes
    e na ordem certa? Aplique os modos de falha acima. A emoção tem um eixo dominante claro?
+   Aplique EIXO_SENTIR_SENTIDO: classifique os blocos entre fazer sentido e fazer sentir
+   e sinalize polo ausente ou trecho longo sem alternância.
 
 ## Restrição de domínio
 Você pode sinalizar problemas de coerência que envolvam o hook ou o CTA (ex.: setup no
@@ -300,10 +372,13 @@ LACUNA_TEMPORAL_BIOGRAFICA: verifique se há marcos de IDADE ("aos X anos") e ma
 consecutivas aplicando a regra COESÃO_ENTRE_FRASES (oposição de carga sem conectivo
 adversativo; não sinalize quando a segunda frase apenas soma/reforça a primeira). Aplique
 COMPRESSAO_TEMPORAL (eventos de datas diferentes em sequência sem marcador de tempo),
-CONTEXTO_ASSUMIDO (premissa tratada como já estabelecida sem nunca aparecer no roteiro) e
-SUBHOOK_DESCONECTADO (o 2º bloco conecta com a promessa do hook?). Depois,
+CONTEXTO_ASSUMIDO (premissa tratada como já estabelecida sem nunca aparecer no roteiro),
+SUBHOOK_DESCONECTADO (o 2º bloco conecta com a promessa do hook?) e SUBHOOK_REDUNDANTE
+(o 2º bloco acrescenta informação nova ou só repete o hook?). Depois,
 dada a estrutura CODEX, verifique se os beats exigidos para a emoção disparar estão
-presentes e na ordem (sentimento). Marque cada achado com [Entendimento] ou [Sentimento]
+presentes e na ordem (sentimento), e aplique EIXO_SENTIR_SENTIDO: o roteiro alterna
+entre fazer sentido e fazer sentir, ou está preso num polo só — onde o humano entra
+nesta história? Marque cada achado com [Entendimento] ou [Sentimento]
 no campo 'porque'."""
         resultado = await self._rodar(self.system_prompt, user_prompt)
         # [Sentimento] nunca bloqueia (fortalece a emoção, não elimina). Só [Entendimento].
