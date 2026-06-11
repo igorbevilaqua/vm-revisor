@@ -599,18 +599,6 @@ async def main():
                         help="Pula o menu e vai direto para o modo especificado.")
     args = parser.parse_args()
 
-    # Lê preferência de web search salva pela interface (config.json), a menos que
-    # o CLI arg --verificar-web já esteja explicitamente ativado.
-    if not args.verificar_web:
-        try:
-            import json as _json
-            _cfg_path = Path(__file__).parent / "config.json"
-            if _cfg_path.exists():
-                _cfg = _json.loads(_cfg_path.read_text())
-                args.verificar_web = bool(_cfg.get("verificar_web", False))
-        except Exception:
-            pass
-
     # Carrega PDFs
     print("\n📚 Carregando base de conhecimento...")
     pdfs = carregar_pdfs()

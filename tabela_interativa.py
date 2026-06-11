@@ -18,21 +18,6 @@ import threading
 import webbrowser
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
-
-
-def ler_config() -> dict:
-    try:
-        return json.loads(CONFIG_PATH.read_text())
-    except Exception:
-        return {}
-
-
-def salvar_config(dados: dict):
-    atual = ler_config()
-    atual.update(dados)
-    CONFIG_PATH.write_text(json.dumps(atual, indent=2, ensure_ascii=False))
-
 from terminal import patch_stdout
 patch_stdout()
 
@@ -162,12 +147,157 @@ def _para_idx_de_achado(trecho: str, texto: str, para_offsets: list[int]) -> int
     return 0
 
 
+MAX_SEG_CHARS = 280  # ~3 linhas visuais por campo Antes/Depois
+
+_SEV_ORD = {"erro": 0, "aviso": 1, "sugestao": 2}
+_NAT_ORD = {"objetivo": 0, "subjetivo": 1}
+
+
+def _chave_prioridade(item):
+    """Prioridade de um achado: severidade > natureza objetiva > confiança."""
+    return (
+        _SEV_ORD.get(item.get("severidade", "sugestao"), 2),
+        _NAT_ORD.get(item.get("natureza", "subjetivo"), 1),
+        -(item.get("confianca") or 0),
+    )
+
+
+def _segmentar_paragrafo(par: str, trechos: list) -> list:
+    """Divide um parágrafo longo em segmentos menores para a tabela, respeitando
+    fronteiras de frase — nunca corta no meio de uma frase. Cada segmento é uma
+    fatia LITERAL do parágrafo (substituível no Google Doc). Não divide se algum
+    trecho de achado cruzaria a fronteira (o trecho precisa caber inteiro em um
+    segmento)."""
+    if len(par) <= MAX_SEG_CHARS:
+        return [par]
+    cortes = [0] + [m.end() for m in _re.finditer(r"[.!?…]+\s+", par)] + [len(par)]
+    frases = [par[cortes[i]:cortes[i + 1]] for i in range(len(cortes) - 1)]
+    frases = [f for f in frases if f.strip()]
+    if len(frases) < 2:
+        return [par]
+    segs, atual = [], ""
+    for f in frases:
+        if atual and len(atual) + len(f) > MAX_SEG_CHARS:
+            segs.append(atual.strip())
+            atual = f
+        else:
+            atual += f
+    if atual.strip():
+        segs.append(atual.strip())
+    if len(segs) < 2:
+        return [par]
+    for t in trechos:
+        if t and t in par and not any(t in s for s in segs):
+            return [par]  # trecho cruzaria a fronteira — mantém o parágrafo inteiro
+    return segs
+
+
+def _fundir_llm(seg_texto: str, itens: list):
+    """Integra correções sobrepostas (camadas diferentes) num texto único e fluido,
+    preservando a voz do autor. Retorna o texto fundido, ou None se indisponível ou
+    implausível (caller usa o fallback mecânico)."""
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        lista = "\n".join(
+            f"- [{i['camada']}] \"{i['trecho_original']}\" → \"{i['correcao']}\"\n"
+            f"  Motivo: {(i['porque'] or '')[:200]}"
+            for i in itens
+        )
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=700,
+            system=("Você é um editor de roteiros de vídeos curtos. Integre TODAS as "
+                    "correções listadas no trecho original, produzindo UM texto final "
+                    "coeso e natural, na voz do autor — como um editor humano que "
+                    "incorporou todas as mudanças numa única reescrita. Responda APENAS "
+                    "com o texto final, sem comentários, prefixos nem aspas."),
+            messages=[{"role": "user", "content":
+                       f"TRECHO ORIGINAL:\n{seg_texto}\n\nCORREÇÕES A INTEGRAR:\n{lista}"}],
+        )
+        out = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        if not out or not (0.4 * len(seg_texto) <= len(out) <= 3 * len(seg_texto) + 200):
+            return None
+        return out
+    except Exception:
+        return None
+
+
+def _consolidar_segmento(seg_texto: str, itens: list, para_idx: int) -> dict:
+    """Consolida todos os achados de um mesmo segmento em UMA linha da tabela.
+
+    ANTES = o segmento inteiro; DEPOIS = o segmento com todas as correções
+    compatíveis aplicadas em conjunto:
+      - Compatíveis (spans que não se sobrepõem) → fusão mecânica, da direita
+        para a esquerda, cada `correcao` no lugar do seu `trecho_original`.
+      - Sobreposição entre camadas DIFERENTES (ex.: fact-check corrige um dado e
+        storytelling reescreve o parágrafo) → complementares: fusão via LLM.
+      - Sobreposição na MESMA camada = reescritas alternativas concorrentes →
+        só a de maior prioridade entra; as descartadas não aparecem.
+
+    A linha resultante carrega `camadas` (todas que contribuíram), `porque`
+    combinado (justificativa de cada achado incorporado) e `ids` (para persistir
+    a decisão única em todos os achados incorporados)."""
+    ordenados = sorted(itens, key=_chave_prioridade)
+    aceitos = []      # [(start, end, item)] — spans sem sobreposição
+    sobrepostos = []  # sobreposição com camada diferente → candidatos a fusão LLM
+    for it in ordenados:
+        t = it["trecho_original"]
+        pos = seg_texto.find(t)
+        span = (pos, pos + len(t))
+        conflito = [a for a in aceitos if not (span[1] <= a[0] or span[0] >= a[1])]
+        if not conflito:
+            aceitos.append((span[0], span[1], it))
+        elif all(a[2]["camada"] != it["camada"] for a in conflito):
+            sobrepostos.append(it)
+        # mesma camada no mesmo span = alternativa concorrente — descarta
+
+    depois = seg_texto
+    for s, e, it in sorted(aceitos, key=lambda x: -x[0]):
+        depois = depois[:s] + it["correcao"] + depois[e:]
+
+    incorporados = [it for _, _, it in sorted(aceitos, key=lambda x: x[0])]
+    if sobrepostos:
+        fundido = _fundir_llm(seg_texto, incorporados + sobrepostos)
+        if fundido:
+            depois = fundido
+            incorporados = incorporados + sobrepostos
+
+    primario = min(incorporados, key=_chave_prioridade)
+    camadas = []
+    for it in incorporados:
+        if it["camada"] not in camadas:
+            camadas.append(it["camada"])
+    if len(incorporados) > 1:
+        porque = "\n\n".join(f"[{it['camada']}] {it['porque']}" for it in incorporados)
+    else:
+        porque = primario["porque"]
+
+    return {
+        "id": primario["id"],
+        "ids": [it["id"] for it in incorporados],
+        "tipo": "correcao",
+        "severidade": primario["severidade"],
+        "natureza": primario["natureza"],
+        "camada": primario["camada"],
+        "camadas": camadas,
+        "trecho_original": seg_texto,
+        "correcao": depois,
+        "porque": porque,
+        "confianca": max((it.get("confianca") or 0) for it in incorporados),
+        "diff_inline": _diff_inline(seg_texto, depois),
+        "relacionado_a": None,
+        "decisao": None,
+        "_para_idx": para_idx,
+    }
+
+
 def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
     cons = roteiro_raw.get("consolidado", {})
     achados = cons.get("achados", [])
     texto = roteiro_raw.get("texto", "")
 
-    # Parágrafos na ordem do roteiro
+    # Parágrafos na ordem do roteiro (a 1ª linha é sempre a headline)
     paragrafos_raw = [p.strip() for p in texto.split("\n") if p.strip()]
 
     # Offsets de cada parágrafo no texto inteiro (para posicionamento dos achados)
@@ -178,46 +308,65 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         para_offsets.append(idx if idx != -1 else offset)
         offset = (idx if idx != -1 else offset) + len(p)
 
-    correcoes = []
+    itens = []
     for i, a in enumerate(achados, 1):
         t = (a.get("trecho_original") or "").strip()
         c = (a.get("correcao") or "").strip()
         if not t and not c:
             continue
         item = transformar_achado(a, i)
-        item["_para_idx"] = _para_idx_de_achado(t, texto, para_offsets)
-        correcoes.append(item)
+        item["_para_idx"] = _para_idx_de_achado(item["trecho_original"], texto, para_offsets)
+        itens.append(item)
 
-    # Dedup: max 1 achado per unique trecho_original (keep highest priority).
-    # Os de menor prioridade não são descartados: viram `achados_complementares` do
-    # primário, exibidos via tooltip — desde que passem no filtro de qualidade:
-    #   1. confianca >= 80 (descarta achados inseguros)
-    #   2. camada != camada do primário (mesma camada quase sempre repete o primário;
-    #      outra camada é informação genuinamente nova sobre o mesmo trecho)
-    _sev = {"erro": 0, "aviso": 1, "sugestao": 2}
-    _nat = {"objetivo": 0, "subjetivo": 1}
-    seen_t: dict = {}
-    for item2 in sorted(correcoes, key=lambda x: (
-        _sev.get(x.get("severidade", "sugestao"), 2),
-        _nat.get(x.get("natureza", "subjetivo"), 1),
-        -(x.get("confianca") or 0),
-    )):
-        t2 = item2["trecho_original"]
-        if not t2:
-            continue
-        if t2 not in seen_t:
-            seen_t[t2] = {**item2, "achados_complementares": []}
+    # ── Leitura sequencial: a tabela reproduz o roteiro do início ao fim ──────
+    # `linhas` é o plano de renderização, na ordem original do texto:
+    #   {tipo: "leitura", texto}   → parágrafo/segmento sem achado
+    #   {tipo: "correcao", id}     → linha consolidada (referencia `correcoes`)
+    #   {tipo: "secao", label}     → separador (achados sem trecho, no fim)
+    correcoes = []
+    linhas = []
+    n_par = len(paragrafos_raw)
+
+    def _linha_individual(it):
+        """Achado que não consolida (trecho não-literal no parágrafo): vira linha
+        própria, mantendo o fragmento original como Antes."""
+        it["ids"] = [it["id"]]
+        it["camadas"] = [it["camada"]]
+        correcoes.append(it)
+        linhas.append({"tipo": "correcao", "id": it["id"]})
+
+    for pi, par in enumerate(paragrafos_raw):
+        achs = [it for it in itens if it["_para_idx"] == pi]
+        dentro = [a for a in achs if a["trecho_original"] and a["trecho_original"] in par]
+        _ids_dentro = {id(a) for a in dentro}
+        fora = [a for a in achs if id(a) not in _ids_dentro]
+        if not dentro:
+            linhas.append({"tipo": "leitura", "texto": par})
         else:
-            primario = seen_t[t2]
-            if ((item2.get("confianca") or 0) >= 80
-                    and item2.get("camada") != primario.get("camada")):
-                primario["achados_complementares"].append({
-                    "camada": item2["camada"],
-                    "severidade": item2["severidade"],
-                    "porque": item2["porque"],
-                    "confianca": item2.get("confianca", 0),
-                })
-    correcoes = sorted(seen_t.values(), key=lambda x: x.get("_para_idx", 9999))
+            segs = _segmentar_paragrafo(par, [a["trecho_original"] for a in dentro])
+            usados = set()
+            for seg in segs:
+                seg_achs = [a for a in dentro
+                            if id(a) not in usados and a["trecho_original"] in seg]
+                for a in seg_achs:
+                    usados.add(id(a))
+                if not seg_achs:
+                    linhas.append({"tipo": "leitura", "texto": seg})
+                else:
+                    row = _consolidar_segmento(seg, seg_achs, pi)
+                    correcoes.append(row)
+                    linhas.append({"tipo": "correcao", "id": row["id"]})
+        # Trecho localizado no parágrafo só com match normalizado (espaços): linha
+        # individual logo após o parágrafo, preservando a posição na leitura.
+        for a in fora:
+            _linha_individual(a)
+
+    # Achados sem trecho localizado (inserções, beats ausentes) — seção final
+    finais = [it for it in itens if it["_para_idx"] >= n_par]
+    if finais:
+        linhas.append({"tipo": "secao", "label": "Achados sem trecho identificado"})
+        for a in sorted(finais, key=_chave_prioridade):
+            _linha_individual(a)
 
     veredicto = cons.get("veredicto", "—")
     return {
@@ -229,6 +378,7 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         },
         "url_gdocs": url_gdocs or "",
         "paragrafos": paragrafos_raw,
+        "linhas": linhas,
         "correcoes": correcoes,
         "meta": meta or {"total": 1, "atual": 1, "proximo_titulo": None},
     }
@@ -410,14 +560,6 @@ class TabelaServer:
         def api_pular():
             server._done_event.set()
             server._next_event.set()  # desbloqueia sem esperar
-            return jsonify({"ok": True})
-
-        @app.route("/api/config", methods=["GET", "POST"])
-        def api_config():
-            if request.method == "GET":
-                return jsonify(ler_config())
-            dados = request.get_json() or {}
-            salvar_config(dados)
             return jsonify({"ok": True})
 
         return app
@@ -611,20 +753,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .verd-ajuste{background:var(--aviso-bg);border-color:var(--aviso-border);color:var(--aviso)}
 .verd-ok{background:var(--aprovado-bg);border-color:rgba(0,201,127,.3);color:var(--aprovado)}
 
-/* ── Toggle web search ─── */
-.ws-toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;
-  padding:3px 10px;border-radius:4px;border:1px solid var(--border);
-  font-family:var(--mono);font-size:10px;color:var(--text-3);
-  transition:all .2s;user-select:none;white-space:nowrap}
-.ws-toggle:hover{border-color:var(--border-light);color:var(--text-2)}
-.ws-toggle.on{border-color:rgba(75,158,255,.4);background:rgba(75,158,255,.08);color:#4B9EFF}
-.ws-track{width:24px;height:13px;border-radius:7px;border:1px solid currentColor;
-  position:relative;flex-shrink:0;transition:background .2s}
-.ws-toggle.on .ws-track{background:rgba(75,158,255,.25)}
-.ws-thumb{width:9px;height:9px;border-radius:50%;background:currentColor;
-  position:absolute;top:1px;left:1px;transition:left .2s}
-.ws-toggle.on .ws-thumb{left:12px}
-
 /* ── Filtros ─── */
 #filtros{position:sticky;top:52px;z-index:99;background:var(--surface);
   border-bottom:1px solid var(--border);padding:9px 24px;display:flex;align-items:center;gap:6px}
@@ -682,7 +810,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .badge-e{background:var(--bloqueante-bg);border-color:var(--bloqueante-border);color:var(--bloqueante)}
 .badge-a{background:var(--aviso-bg);border-color:var(--aviso-border);color:var(--aviso)}
 .badge-s{background:var(--sugestao-bg);border-color:var(--sugestao-border);color:var(--sugestao)}
-.tag-row{display:flex;align-items:center;gap:5px;margin-top:5px}
+.tag-row{display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap}
 .tag-c{display:inline-block;padding:2px 6px;border-radius:2px;
   font-family:var(--mono);font-size:9px;font-weight:500;background:var(--surface-3);
   color:var(--text-3);border:1px solid var(--border);letter-spacing:.04em}
@@ -691,12 +819,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .ii{cursor:help;color:var(--text-3);font-size:12px;opacity:.65;transition:opacity .15s;
   user-select:none;line-height:1}
 .ii:hover{opacity:1;color:var(--sugestao)}
-
-/* Badge +N — achados complementares no mesmo trecho (visualmente distinto do ⓘ) */
-.ii-comp{font-family:var(--mono);font-size:9px;font-weight:600;padding:1px 5px;
-  border-radius:8px;background:var(--surface-3);border:1px solid var(--border-light);
-  color:var(--text-2);opacity:.85}
-.ii-comp:hover{opacity:1;color:var(--sugestao);border-color:var(--sugestao)}
 
 /* Tooltip flutuante */
 #tt{display:none;position:fixed;z-index:500;background:var(--surface-3);
@@ -837,10 +959,6 @@ tr.row-focus td{background:rgba(75,158,255,.06)!important}
     <div class="stat-chip chip-a" id="chip-a"><span class="dot"></span><span id="n-a">0</span> aviso(s)</div>
     <div class="stat-chip chip-s" id="chip-s"><span class="dot"></span><span id="n-s">0</span> sugestão(ões)</div>
     <span class="verd-badge" id="verd-badge">—</span>
-    <div class="ws-toggle" id="ws-toggle" onclick="toggleWebSearch()" title="Habilita busca na web no fact-check da próxima revisão">
-      <span class="ws-track"><span class="ws-thumb"></span></span>
-      <span id="ws-label">web search</span>
-    </div>
   </div>
 </div>
 
@@ -968,21 +1086,11 @@ function renderBadge(c){
   const cls=c.severidade==='erro'?'badge-e':c.severidade==='aviso'?'badge-a':'badge-s';
   const lbl=c.severidade==='erro'?'⛔ Erro':c.severidade==='aviso'?'⚠ Aviso':'💡 Sugest.';
   const info=c.porque?`<span class="ii" data-w="${esc(c.porque)}">ⓘ</span>`:'';
-  let comp='';
-  const ac=c.achados_complementares;
-  if(ac&&ac.length){
-    const sevLbl={erro:'Erro',aviso:'Aviso',sugestao:'Sugestão'};
-    const pl=ac.length>1?'s':'';
-    const txt=`+${ac.length} outro${pl} achado${pl} neste trecho:\n\n`+
-      ac.map(a=>{
-        const p=a.porque||'';
-        const pTrunc=p.length>120?p.slice(0,120)+'…':p;
-        return`[${a.camada} · ${sevLbl[a.severidade]||a.severidade} · ${a.confianca}%]\n${pTrunc}`;
-      }).join('\n\n');
-    comp=`<span class="ii ii-comp" data-w="${esc(txt)}">+${ac.length}</span>`;
-  }
+  // Linha consolidada mostra as tags de TODAS as camadas que contribuíram
+  const tags=(c.camadas&&c.camadas.length?c.camadas:[c.camada])
+    .map(t=>`<span class="tag-c">${esc(t)}</span>`).join('');
   return`<div class="badge ${cls}">${lbl}</div>
-    <div class="tag-row"><span class="tag-c">${esc(c.camada)}</span>${info}${comp}</div>`;
+    <div class="tag-row">${tags}${info}</div>`;
 }
 
 function renderAcao(c){
@@ -1069,20 +1177,12 @@ function renderTudo(){
   }
 
   if(filtro==='roteiro'){
-    const paras=D.paragrafos||[];
-    const semTrecho=cs.filter(c=>c.tipo==='correcao'&&(c._para_idx===undefined||c._para_idx>=paras.length));
-    paras.forEach((texto,pi)=>{
-      const achados=cs.filter(c=>c.tipo==='correcao'&&c._para_idx===pi);
-      if(achados.length===0){
-        addLeituraRow(texto,pi);
-      } else {
-        achados.forEach(c=>addRow(c));
-      }
+    // Leitura sequencial: D.linhas reproduz o roteiro na ordem original do texto
+    (D.linhas||[]).forEach((l,li)=>{
+      if(l.tipo==='leitura')addLeituraRow(l.texto,li);
+      else if(l.tipo==='secao')addSec(l.label);
+      else{const c=getC(l.id);if(c)addRow(c);}
     });
-    if(semTrecho.length){
-      addSec('Achados sem trecho identificado');
-      semTrecho.forEach(c=>addRow(c));
-    }
   } else {
     const bloq=cs.filter(c=>c.severidade==='erro'&&c.tipo!=='contexto');
     const avis=cs.filter(c=>c.severidade==='aviso'&&c.tipo!=='contexto');
@@ -1177,8 +1277,11 @@ function getC(id){return D.correcoes.find(c=>c.id===id)}
 
 function sync(id,motivo){
   const c=getC(id);if(!c)return;
-  fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id,decisao:c.decisao,motivo:motivo||''})}).catch(()=>{});
+  // Linha consolidada: a decisão única vale para todos os achados incorporados
+  (c.ids&&c.ids.length?c.ids:[id]).forEach(aid=>{
+    fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:aid,decisao:c.decisao,motivo:motivo||''})}).catch(()=>{});
+  });
 }
 
 function aplicar(id){
@@ -1349,26 +1452,8 @@ function toast(msg,tipo){
   clearTimeout(_toastTimer);_toastTimer=setTimeout(()=>t.classList.remove('show'),3500);
 }
 
-// ── Web Search Toggle ─────────────────────────────────────────────────────────
-let _wsAtivo=false;
-function _aplicarEstadoWS(ativo){
-  _wsAtivo=ativo;const el=$id('ws-toggle');if(!el)return;el.classList.toggle('on',ativo);
-}
-async function iniciarToggleWS(){
-  try{const r=await fetch('/api/config');const cfg=await r.json();_aplicarEstadoWS(!!(cfg.verificar_web));}
-  catch(e){_aplicarEstadoWS(false)}
-}
-async function toggleWebSearch(){
-  const novo=!_wsAtivo;_aplicarEstadoWS(novo);
-  try{
-    await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({verificar_web:novo})});
-    toast(novo?'Web search ativado para a próxima revisão':'Web search desativado','s');
-  }catch(e){_aplicarEstadoWS(!novo)}
-}
-
 // ── Init ──────────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded',()=>{carregar();renderTudo();iniciarToggleWS()});
+window.addEventListener('DOMContentLoaded',()=>{carregar();renderTudo()});
 </script>
 </body>
 </html>"""
