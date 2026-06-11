@@ -188,7 +188,12 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         item["_para_idx"] = _para_idx_de_achado(t, texto, para_offsets)
         correcoes.append(item)
 
-    # Dedup: max 1 achado per unique trecho_original (keep highest priority)
+    # Dedup: max 1 achado per unique trecho_original (keep highest priority).
+    # Os de menor prioridade não são descartados: viram `achados_complementares` do
+    # primário, exibidos via tooltip — desde que passem no filtro de qualidade:
+    #   1. confianca >= 80 (descarta achados inseguros)
+    #   2. camada != camada do primário (mesma camada quase sempre repete o primário;
+    #      outra camada é informação genuinamente nova sobre o mesmo trecho)
     _sev = {"erro": 0, "aviso": 1, "sugestao": 2}
     _nat = {"objetivo": 0, "subjetivo": 1}
     seen_t: dict = {}
@@ -198,8 +203,20 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
         -(x.get("confianca") or 0),
     )):
         t2 = item2["trecho_original"]
-        if t2 and t2 not in seen_t:
-            seen_t[t2] = item2
+        if not t2:
+            continue
+        if t2 not in seen_t:
+            seen_t[t2] = {**item2, "achados_complementares": []}
+        else:
+            primario = seen_t[t2]
+            if ((item2.get("confianca") or 0) >= 80
+                    and item2.get("camada") != primario.get("camada")):
+                primario["achados_complementares"].append({
+                    "camada": item2["camada"],
+                    "severidade": item2["severidade"],
+                    "porque": item2["porque"],
+                    "confianca": item2.get("confianca", 0),
+                })
     correcoes = sorted(seen_t.values(), key=lambda x: x.get("_para_idx", 9999))
 
     veredicto = cons.get("veredicto", "—")
@@ -675,6 +692,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
   user-select:none;line-height:1}
 .ii:hover{opacity:1;color:var(--sugestao)}
 
+/* Badge +N — achados complementares no mesmo trecho (visualmente distinto do ⓘ) */
+.ii-comp{font-family:var(--mono);font-size:9px;font-weight:600;padding:1px 5px;
+  border-radius:8px;background:var(--surface-3);border:1px solid var(--border-light);
+  color:var(--text-2);opacity:.85}
+.ii-comp:hover{opacity:1;color:var(--sugestao);border-color:var(--sugestao)}
+
 /* Tooltip flutuante */
 #tt{display:none;position:fixed;z-index:500;background:var(--surface-3);
   border:1px solid var(--border-light);color:var(--text);
@@ -945,8 +968,21 @@ function renderBadge(c){
   const cls=c.severidade==='erro'?'badge-e':c.severidade==='aviso'?'badge-a':'badge-s';
   const lbl=c.severidade==='erro'?'⛔ Erro':c.severidade==='aviso'?'⚠ Aviso':'💡 Sugest.';
   const info=c.porque?`<span class="ii" data-w="${esc(c.porque)}">ⓘ</span>`:'';
+  let comp='';
+  const ac=c.achados_complementares;
+  if(ac&&ac.length){
+    const sevLbl={erro:'Erro',aviso:'Aviso',sugestao:'Sugestão'};
+    const pl=ac.length>1?'s':'';
+    const txt=`+${ac.length} outro${pl} achado${pl} neste trecho:\n\n`+
+      ac.map(a=>{
+        const p=a.porque||'';
+        const pTrunc=p.length>120?p.slice(0,120)+'…':p;
+        return`[${a.camada} · ${sevLbl[a.severidade]||a.severidade} · ${a.confianca}%]\n${pTrunc}`;
+      }).join('\n\n');
+    comp=`<span class="ii ii-comp" data-w="${esc(txt)}">+${ac.length}</span>`;
+  }
   return`<div class="badge ${cls}">${lbl}</div>
-    <div class="tag-row"><span class="tag-c">${esc(c.camada)}</span>${info}</div>`;
+    <div class="tag-row"><span class="tag-c">${esc(c.camada)}</span>${info}${comp}</div>`;
 }
 
 function renderAcao(c){

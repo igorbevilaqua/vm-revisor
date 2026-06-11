@@ -19,5 +19,8 @@ __pycache__/
 # Claude Code (configuração local)
 .claude/
 
+# Preferências locais da interface (ex.: verificar_web)
+config.json
+
 # Backups
 preferencias.backup.md

@@ -23,6 +23,17 @@ locutar e de entender no primeiro ouvido — sem mudar o conteúdo nem o estilo 
 - **Conector fraco** — emendas que matam o ritmo ("e aí", "então", "sendo assim" em excesso).
 - **Jargão sem contexto** — siglas, termos técnicos e jargões de domínio usados sem explicação
   para o espectador leigo (ver regra JARGÃO_SEM_CONTEXTO abaixo).
+- **Parágrafo denso demais** — bloco acima de ~80 palavras (ver regra PARAGRAFO_DENSO abaixo).
+
+## PARAGRAFO_DENSO
+
+Parágrafos acima de ~80 palavras são densos demais para o ritmo de vídeo curto:
+comprimem múltiplos beats em um bloco, tornam a locução cansativa e dificultam a
+edição. Flagre como "aviso" + "objetivo".
+
+`trecho_original`: o parágrafo inteiro.
+`correcao`: proposta de divisão em 2 blocos menores, preservando todos os fatos e
+o tom do autor.
 
 ## JARGÃO_SEM_CONTEXTO
 
@@ -102,5 +113,8 @@ a versão reescrita — mais enxuta e fácil de locutar, sem mudar o sentido nem
 Aplique também a regra JARGÃO_SEM_CONTEXTO: identifique siglas em maiúsculas sem expansão
 e termos técnicos de domínio que o espectador leigo precisaria entender para seguir a
 narrativa. Para cada um, sugira a inserção mínima ("que é", aposto) na primeira ocorrência.
-Ignore termos que funcionam como cenário sem impactar a compreensão da história."""
+Ignore termos que funcionam como cenário sem impactar a compreensão da história.
+
+Aplique também a regra PARAGRAFO_DENSO: flagre parágrafos acima de ~80 palavras e proponha
+a divisão em 2 blocos menores, preservando todos os fatos e o tom do autor."""
         return await self._rodar(self.system_prompt, user_prompt)

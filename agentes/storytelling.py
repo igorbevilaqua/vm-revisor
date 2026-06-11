@@ -22,6 +22,23 @@ PRINCIPIOS_PADRAO = """Princípios de storytelling viral para Reels:
 - Resolução satisfatória ou cliffhanger intencional
 - Linguagem concreta, visual e cinematográfica"""
 
+REGRA_PARAGRAFO_JORNALISTICO = """## PARAGRAFO_JORNALISTICO_SEM_EMOCAO (regra nomeada)
+
+Quando um parágrafo inteiro é pura entrega de fatos sequenciais (X fez Y, depois Z
+aconteceu, então W) sem nenhum mecanismo emocional identificável (tensão, ironia,
+stakes declarados, gap de curiosidade, personagem com desejo), FLAGRE.
+
+COMO DETECTAR: varra o corpo parágrafo a parágrafo. Para cada um, aplique a
+pergunta-filtro: "esse parágrafo tem algum elemento que faz o espectador sentir algo
+ou querer saber o que vem depois?" Se não: é jornalismo, não storytelling.
+
+O que reportar:
+- `trecho_original`: o parágrafo inteiro.
+- `correcao`: versão reescrita que injeta pelo menos 1 mecanismo emocional SEM alterar
+  os fatos (ex.: stakes, ironia, decisão difícil, consequência concreta).
+- `severidade`: "aviso".
+- `natureza`: "objetivo" — a ausência de mecanismo emocional é verificável, não é gosto."""
+
 
 def montar_system(base_conhecimento: str) -> str:
     return f"""Você é o Agente de Storytelling da Viral Media Labs (VML).
@@ -32,6 +49,8 @@ aplicáveis — não teoria genérica.
 {base_conhecimento}
 
 {CODEX}
+
+{REGRA_PARAGRAFO_JORNALISTICO}
 
 ## Domínio e restrições
 Você avalia a estrutura narrativa do CORPO do roteiro.
@@ -75,5 +94,7 @@ class AgenteStorytelling(AgenteBase):
 
 {self._formatar_roteiro(roteiro)}
 
-Aponte cada ponto que perde força narrativa, com o trecho e a melhoria concreta."""
+Aponte cada ponto que perde força narrativa, com o trecho e a melhoria concreta.
+Aplique a regra PARAGRAFO_JORNALISTICO_SEM_EMOCAO: varra o corpo parágrafo a parágrafo
+e flagre os que só entregam fatos sequenciais sem nenhum mecanismo emocional."""
         return await self._rodar(self.system_prompt, user_prompt)

@@ -133,6 +133,74 @@ oposição de cargas é verificável, mas a falta do conectivo não IMPEDE a com
 coesão narrativa), então NÃO bloqueia o veredicto. Comece o `porque` com "[Entendimento] "."""
 
 
+# Regra de compressão temporal em sequências de eventos (dimensão ENTENDIMENTO).
+REGRA_COMPRESSAO_TEMPORAL = """## COMPRESSAO_TEMPORAL (regra de ENTENDIMENTO)
+
+Quando dois ou mais eventos com datas diferentes são narrados em sequência SEM nenhum
+marcador de tempo entre eles, o espectador entende que aconteceram em sequência imediata
+— quando na verdade a história real os separa por meses ou anos.
+
+PADRÃO DE DETECÇÃO: sequência de ações biográficas sem conectivo temporal explícito entre
+eventos que a história real separa por meses ou anos.
+Ex.: "veio ao Brasil... casou... abriu o Bob's" — sem "5 anos depois", "em 1952",
+"no mesmo ano" entre os eventos.
+
+O que reportar:
+- `trecho_original`: o ponto de junção entre os dois eventos comprimidos.
+- `correcao`: o trecho com o marcador de tempo correto inserido ("Cinco anos depois,",
+  "Em 1952,").
+- `porque`: comece com "[Entendimento] ". Explique quais eventos foram comprimidos e
+  qual o intervalo real entre eles.
+
+NÃO SINALIZAR quando os eventos realmente aconteceram em sequência imediata, ou quando
+já existe marcador de tempo (mesmo aproximado: "anos depois", "tempo depois") entre eles.
+
+CLASSIFICAÇÃO: [Entendimento], severidade "aviso" + natureza "objetivo"."""
+
+
+# Regra de contexto assumido sem apresentação prévia (dimensão ENTENDIMENTO).
+REGRA_CONTEXTO_ASSUMIDO = """## CONTEXTO_ASSUMIDO (regra de ENTENDIMENTO)
+
+Detecta quando um problema, situação ou contexto é mencionado como se já estivesse
+estabelecido para o espectador, mas nunca foi apresentado no roteiro.
+
+PADRÃO DE DISPARO: frases introduzidas por "como [fato negativo]", "já que [premissa]",
+"por isso [consequência de algo não explicado]" — onde o [fato/premissa] ainda não
+apareceu no roteiro.
+
+O que reportar:
+- `trecho_original`: a frase com o contexto assumido.
+- `correcao`: reescrita que insere a premissa necessária ANTES da consequência.
+- `porque`: comece com "[Entendimento] ". Aponte qual premissa foi assumida sem nunca
+  ter sido apresentada.
+
+CLASSIFICAÇÃO: [Entendimento], severidade "erro" se o contexto assumido IMPEDE a
+compreensão; "aviso" se apenas enfraquece. Natureza "objetivo"."""
+
+
+# Regra do sub-hook (2º bloco) desconectado do hook (dimensão ENTENDIMENTO).
+REGRA_SUBHOOK_DESCONECTADO = """## SUBHOOK_DESCONECTADO (regra de ENTENDIMENTO)
+
+O parágrafo imediatamente após o hook (o SUB-HOOK, 2º bloco do roteiro) tem um papel
+específico: conectar com a promessa do hook, amplificar tensão ou curiosidade, e puxar
+o espectador para o corpo.
+
+COMO DETECTAR:
+1. Identifique o sub-hook (2º bloco do roteiro).
+2. Verifique: ele menciona algo do hook? Ele amplifica ou responde à tensão do hook?
+   Ou começa do zero, como se o hook não existisse?
+3. Se desconectado → SINALIZE.
+
+O que reportar:
+- `trecho_original`: o sub-hook inteiro.
+- `correcao`: versão do sub-hook que cria uma ponte explícita com o hook (sem reescrever
+  o hook em si — o hook é domínio de outro agente).
+- `porque`: comece com "[Entendimento] ". Aponte o que o hook promete e por que o
+  sub-hook não conecta.
+
+CLASSIFICAÇÃO: [Entendimento], severidade "aviso" + natureza "objetivo"."""
+
+
 def montar_system(base_conhecimento: str) -> str:
     return f"""Você é o Agente de Coerência & Continuidade da Viral Media Labs (VML).
 
@@ -147,6 +215,12 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
 
 {REGRA_COESAO_FRASES}
 
+{REGRA_COMPRESSAO_TEMPORAL}
+
+{REGRA_CONTEXTO_ASSUMIDO}
+
+{REGRA_SUBHOOK_DESCONECTADO}
+
 ## Procedimento (siga nesta ordem, mentalmente)
 1. Identifique a estrutura CODEX em uso (ou a pretendida) e a emoção-alvo.
 2. INVENTÁRIO: liste cada personagem, entidade, premissa e termo técnico, e onde cada um
@@ -159,6 +233,12 @@ SENTIMENTO (a emoção se constrói?). Trabalhe de forma METÓDICA, não holíst
    Aplique também a regra COESÃO_ENTRE_FRASES: varra os pares de frases consecutivas e
    sinalize oposição de carga semântica sem conectivo adversativo (respeitando a exceção
    de SOMA/reforço).
+   Aplique COMPRESSAO_TEMPORAL: eventos com datas diferentes narrados em sequência sem
+   marcador de tempo entre eles.
+   Aplique CONTEXTO_ASSUMIDO: premissa tratada como estabelecida sem nunca ter sido
+   apresentada ("como [fato]", "já que [premissa]", "por isso [consequência]").
+   Aplique SUBHOOK_DESCONECTADO: o 2º bloco conecta com a promessa do hook ou começa
+   do zero?
 4. SENTIMENTO — dada a estrutura, os BEATS exigidos para a emoção disparar estão presentes
    e na ordem certa? Aplique os modos de falha acima. A emoção tem um eixo dominante claro?
 
@@ -218,7 +298,10 @@ saltos e setups sem payoff (entendimento). Se for um roteiro biográfico, apliqu
 LACUNA_TEMPORAL_BIOGRAFICA: verifique se há marcos de IDADE ("aos X anos") e marcos de ANO
 ("em XXXX") e se alguma frase os combina; se não, sinalize. Varra também os pares de frases
 consecutivas aplicando a regra COESÃO_ENTRE_FRASES (oposição de carga sem conectivo
-adversativo; não sinalize quando a segunda frase apenas soma/reforça a primeira). Depois,
+adversativo; não sinalize quando a segunda frase apenas soma/reforça a primeira). Aplique
+COMPRESSAO_TEMPORAL (eventos de datas diferentes em sequência sem marcador de tempo),
+CONTEXTO_ASSUMIDO (premissa tratada como já estabelecida sem nunca aparecer no roteiro) e
+SUBHOOK_DESCONECTADO (o 2º bloco conecta com a promessa do hook?). Depois,
 dada a estrutura CODEX, verifique se os beats exigidos para a emoção disparar estão
 presentes e na ordem (sentimento). Marque cada achado com [Entendimento] ou [Sentimento]
 no campo 'porque'."""
