@@ -15,10 +15,15 @@ roteiro-revisor/
 ├── CLAUDE.md                ← este arquivo (instruções para você, Claude Code)
 ├── preferencias.md          ← REGRAS DA CASA: guia de estilo do editor, injetado em todo agente
 ├── revisar.py               ← script principal — PONTO DE ENTRADA
+├── interface.py             ← interface gráfica: URL do Doc + progresso real dos agentes → Tabela Interativa
+├── Revisor.bat              ← duplo clique no Windows: abre a interface gráfica
+├── Revisor.command          ← duplo clique no Mac: abre a interface gráfica
 ├── relatorio_correcoes.py   ← gera a tabela de correções em .md
 ├── relatorio_gdocs.py       ← gera a tabela de correções como Google Doc nativo
 ├── aplicar_gdocs.py         ← (alternativo) escreve notas no corpo de uma cópia do Doc
 ├── feedback.py              ← suas rejeições viram regras novas no preferencias.md
+├── ledger.py                ← ledger de decisões (decisoes.jsonl) — fundação do aprendizado
+├── roadmap_aprendizado.md   ← plano em camadas para elevar o aprendizado do sistema
 ├── google_docs.py           ← leitura de roteiros de Google Docs + auth OAuth
 ├── agentes/
 │   ├── __init__.py          ← AgenteBase: contrato de achados estruturados (JSON via tool use)
@@ -44,6 +49,7 @@ roteiro-revisor/
 
 ## Como usar
 ```bash
+python3 interface.py                                 # interface gráfica (ou duplo clique em Revisor.bat / Revisor.command)
 python3 revisar.py                                   # modo interativo (cola o texto)
 python3 revisar.py --arquivo roteiros/exemplo.txt    # arquivo .txt
 python3 revisar.py --gdocs "<link do Google Doc>"    # lê do Google Docs
@@ -84,7 +90,11 @@ precisam DESPERTAR SENTIMENTO, não só fazer sentido.
 - NUNCA modifique os arquivos da pasta `pdfs/` — são a fonte da verdade.
 - Sempre preserve os relatórios anteriores em `relatorios/`.
 - O `preferencias.md` é editável pelo usuário e tem prioridade sobre recomendações genéricas.
-- O Playbook de Storytelling (PDF) é a fonte de verdade do CODEX: 14 estruturas validadas/
-  sugeridas em 6 macrogrupos (Arquétipos de Herói; Batalha e Poder; Revelação e Segredo;
-  Alarme e Impacto; Insight e Contradição; Ruptura e Consequência Pessoal). Obs.: alguns
-  agentes ainda referenciam uma lista antiga de 15 estruturas — alinhar é um follow-up pendente.
+- O Playbook de Storytelling é a fonte de verdade do CODEX: 14 estruturas VALIDADAS +
+  5 SUGERIDAS em 6 macrogrupos (Arquétipos de Herói; Batalha e Poder; Revelação e Segredo;
+  Alarme e Impacto; Insight e Contradição; Ruptura e Consequência Pessoal). A lista vive em
+  `agentes/codex.py` (fonte ÚNICA — nunca duplicar em prompts; storytelling, viral e
+  contexto importam de lá).
+- `ledger.py` + `decisoes.jsonl`: toda decisão do editor (aplicar/editar/pular, com motivo,
+  cliente e estrutura CODEX) é registrada em log append-only — fundação do aprendizado
+  (ver `roadmap_aprendizado.md`). NUNCA apagar o `decisoes.jsonl`.

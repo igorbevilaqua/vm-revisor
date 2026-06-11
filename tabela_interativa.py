@@ -813,7 +813,10 @@ class TabelaServer:
         )
         self._thread.start()
         url = f"http://localhost:{self.porta}"
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+        # Lançado pela interface gráfica (interface.py): a própria página do
+        # launcher redireciona para cá — não abrir uma segunda aba.
+        if not os.environ.get("VML_LAUNCHER"):
+            threading.Timer(0.6, lambda: webbrowser.open(url)).start()
         print(f"\n🌐 Tabela Interativa → {url}")
         print(f"   Revise as correções no browser.")
         return True
