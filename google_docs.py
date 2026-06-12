@@ -52,8 +52,13 @@ def autenticar(scopes=None, token_path=None):
     # Se não tem token válido, faz o fluxo OAuth
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                # invalid_grant: token expirado/revogado no Google — refaz o fluxo
+                print("\n⚠️  Autorização do Google expirou ou foi revogada — autorize de novo no navegador.")
+                creds = None
+        if not creds or not creds.valid:
             if not CREDENTIALS_PATH.exists():
                 print(f"\n❌ Arquivo de credenciais não encontrado em:")
                 print(f"   {CREDENTIALS_PATH}")
