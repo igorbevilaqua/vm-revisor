@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#F4F4F5;font-family:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#18181B;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+    button{font-family:inherit;cursor:pointer;white-space:nowrap}
+    button:disabled{cursor:default}
+    textarea,input{font-family:inherit}
+    ::selection{background:#DCFCE7}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#F4F4F5;padding-bottom:64px">
+
+  <!-- ===== APP HEADER ===== -->
+  <div style="max-width:1280px;margin:0 auto;padding:32px 28px 16px">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px">
+      <div style="width:26px;height:26px;border-radius:7px;background:#18181B;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;letter-spacing:-.03em">VM</div>
+      <span style="font-size:12px;font-weight:600;color:#A1A1AA;letter-spacing:.16em">VML · REVISOR</span>
+    </div>
+    <h1 style="font-size:24px;line-height:1.15;font-weight:700;letter-spacing:-.02em;color:#18181B;margin:0">Revisão de roteiro</h1>
+  </div>
+
+  <!-- ===== PAINEL ===== -->
+  <div style="max-width:1280px;margin:0 auto;padding:0 28px">
+    <div style="background:#fff;border:1px solid #E4E4E7;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 16px 40px -28px rgba(0,0,0,0.18)">
+
+      <!-- shell header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 20px;border-bottom:1px solid #EFEFF1;background:#FCFCFD;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:11px;min-width:0">
+          <span style="font-size:12px;font-weight:600;color:#A1A1AA;letter-spacing:.12em">REVISOR</span>
+          <div style="width:1px;height:18px;background:#E4E4E7"></div>
+          <div style="display:flex;align-items:center;gap:8px;border:1px solid #E4E4E7;background:#fff;border-radius:9px;padding:6px 11px;max-width:380px">
+            <span style="font-size:13px;font-weight:600;color:#27272A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Roteiro 1 · O Nordeste resolveu a dengue por R$ 0,36</span>
+            <span style="color:#A1A1AA;font-size:10px">▾</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;padding:4px 10px 4px 5px;border-radius:999px;background:#F4F4F5">
+            <div style="width:19px;height:19px;border-radius:999px;background:#DDD6FE;color:#6D28D9;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center">CN</div>
+            <span style="font-size:12px;font-weight:500;color:#52525B">Cadu Neiva</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="display:flex;align-items:center;gap:13px;padding:5px 13px;border-radius:10px;background:#FAFAFA;border:1px solid #F0F0F2">
+            <sc-for list="{{ legend }}" as="lg" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="{{ lg.dotStyle }}"></span>
+                <span style="font-size:12px;color:#3F3F46;font-weight:600">{{ lg.count }}</span>
+                <span style="font-size:12px;color:#A1A1AA">{{ lg.label }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:#FEFCE8;border:1px solid #FDE68A;color:#A16207;font-size:12px;font-weight:600;white-space:nowrap">
+            <span style="width:6px;height:6px;border-radius:999px;background:#CA8A04"></span>Aprovado com ajustes
+          </div>
+        </div>
+      </div>
+
+      <!-- progress -->
+      <div style="display:flex;align-items:center;gap:14px;padding:11px 20px;border-bottom:1px solid #F0F0F2;background:#fff">
+        <span style="font-size:12.5px;font-weight:600;color:#27272A;white-space:nowrap"><span style="color:#16A34A">{{ prog.done }}</span> de {{ prog.total }} aplicadas</span>
+        <div style="flex:1;height:6px;border-radius:999px;background:#F0F0F2;overflow:hidden">
+          <div style="{{ prog.fillStyle }}"></div>
+        </div>
+        <span style="font-size:12.5px;color:#A1A1AA;white-space:nowrap">{{ prog.pending }} pendentes</span>
+      </div>
+
+      <!-- column header -->
+      <div style="display:grid;grid-template-columns:50px 162px 1fr 1fr 104px;gap:18px;padding:9px 20px;border-bottom:1px solid #F0F0F2">
+        <div style="font-size:10.5px;font-weight:600;color:#B4B4BB;letter-spacing:.08em">#</div>
+        <div style="font-size:10.5px;font-weight:600;color:#B4B4BB;letter-spacing:.08em">CATEGORIA</div>
+        <div style="font-size:10.5px;font-weight:600;color:#B4B4BB;letter-spacing:.08em">ANTES</div>
+        <div style="font-size:10.5px;font-weight:600;color:#B4B4BB;letter-spacing:.08em">DEPOIS</div>
+        <div style="font-size:10.5px;font-weight:600;color:#B4B4BB;letter-spacing:.08em;text-align:right">AÇÃO</div>
+      </div>
+
+      <sc-for list="{{ findings }}" as="f" hint-placeholder-count="4">
+        <div>
+          <div style="position:relative;display:grid;grid-template-columns:50px 162px 1fr 1fr 104px;gap:18px;padding:17px 20px;border-bottom:1px solid #F4F4F5;align-items:start">
+            <div style="{{ f.barStyle }}"></div>
+            <div style="font-size:13px;font-weight:600;color:#A1A1AA;padding-left:6px;padding-top:1px">{{ f.n }}</div>
+            <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-start">
+              <span style="{{ f.sevChipStyle }}"><span style="{{ f.sevDotStyle }}"></span>{{ f.sevLabel }}</span>
+              <sc-for list="{{ f.cats }}" as="c" hint-placeholder-count="1">
+                <span style="display:inline-flex;padding:2px 8px;border:1px solid #E7E7EA;border-radius:6px;background:#FAFAFA;color:#52525B;font-size:11px;font-weight:500;white-space:nowrap">{{ c }}</span>
+              </sc-for>
+            </div>
+            <div style="{{ f.act.beforeStyle }}">
+              <div style="font-size:13.5px;line-height:1.6;color:#52525B;border-left:2px solid #F4C2C2;padding-left:12px">{{ f.beforeEl }}</div>
+            </div>
+            <div style="{{ f.act.afterStyle }}">
+              <div style="font-size:13.5px;line-height:1.6;color:#1F2937;border-left:2px solid #A7E8BE;padding-left:12px">{{ f.afterEl }}</div>
+              <div style="margin-top:9px;font-size:12px;line-height:1.5;color:#A1A1AA;display:flex;gap:7px;align-items:baseline">
+                <span style="color:#CBCBD0;flex:0 0 auto">✦</span><span>{{ f.why }}</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">
+              <sc-if value="{{ f.act.pending }}" hint-placeholder-val="{{ true }}">
+                <button onClick="{{ f.act.apply }}" style="background:#16A34A;color:#fff;border:none;border-radius:8px;padding:8px 10px;font-size:12.5px;font-weight:600" style-hover="background:#15803D">✓ Aplicar</button>
+                <button onClick="{{ f.act.toggleEdit }}" style="background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:7px 10px;font-size:12.5px;font-weight:500;color:#3F3F46" style-hover="background:#F4F4F5">Editar</button>
+                <button onClick="{{ f.act.skip }}" style="background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:7px 10px;font-size:12.5px;font-weight:500;color:#71717A" style-hover="background:#F4F4F5">Pular</button>
+                <button onClick="{{ f.act.toggleTeach }}" style="background:#FAF5FF;border:1px solid #EBD9FB;border-radius:8px;padding:7px 10px;font-size:12.5px;font-weight:500;color:#7E22CE" style-hover="background:#F3E8FF">Ensinar</button>
+              </sc-if>
+              <sc-if value="{{ f.act.applied }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;justify-content:center;gap:6px;background:#F0FDF4;border:1px solid #BBF7D0;color:#15803D;border-radius:8px;padding:8px 10px;font-size:12.5px;font-weight:600">✓ Aplicado</div>
+                <button onClick="{{ f.act.undo }}" style="background:none;border:none;color:#A1A1AA;font-size:11px;text-decoration:underline">Desfazer</button>
+              </sc-if>
+              <sc-if value="{{ f.act.skipped }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;justify-content:center;background:#F4F4F5;border:1px solid #E4E4E7;color:#71717A;border-radius:8px;padding:8px 10px;font-size:12.5px;font-weight:600">Pulado</div>
+                <button onClick="{{ f.act.undo }}" style="background:none;border:none;color:#A1A1AA;font-size:11px;text-decoration:underline">Retomar</button>
+              </sc-if>
+            </div>
+          </div>
+          <sc-if value="{{ f.act.isEdit }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:0 20px 16px 68px;background:#FCFDFC">
+              <div style="background:#F6FBF7;border:1px solid #D6F0DE;border-radius:10px;padding:13px">
+                <div style="font-size:10.5px;font-weight:700;color:#15803D;margin-bottom:7px;letter-spacing:.06em">EDITAR TEXTO REVISADO</div>
+                <textarea value="{{ f.act.editVal }}" onChange="{{ f.act.onEdit }}" style="width:100%;min-height:66px;border:1px solid #D4D4D8;border-radius:8px;padding:10px 11px;font-size:13.5px;line-height:1.55;color:#18181B;resize:vertical;outline:none"></textarea>
+                <div style="display:flex;gap:8px;margin-top:10px">
+                  <button onClick="{{ f.act.saveEdit }}" style="background:#16A34A;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600">Salvar e aplicar</button>
+                  <button onClick="{{ f.act.closePanel }}" style="background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:500;color:#52525B">Cancelar</button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ f.act.isTeach }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:0 20px 16px 68px;background:#FDFCFE">
+              <div style="background:#FBF7FE;border:1px solid #EBD9FB;border-radius:10px;padding:13px">
+                <div style="font-size:10.5px;font-weight:700;color:#7E22CE;margin-bottom:6px;letter-spacing:.06em">ENSINAR O AGENTE</div>
+                <div style="font-size:12px;color:#7C7C85;margin-bottom:9px;line-height:1.5">Registre uma preferência para o revisor de IA aprender — ele passa a aplicar (ou parar) esse tipo de mudança sozinho.</div>
+                <input placeholder="Ex.: manter números exatos quando vierem de fonte oficial" style="width:100%;border:1px solid #D4D4D8;border-radius:8px;padding:9px 11px;font-size:13px;color:#18181B;outline:none">
+                <div style="display:flex;gap:8px;margin-top:10px">
+                  <button onClick="{{ f.act.saveTeach }}" style="background:#7E22CE;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600">Salvar preferência</button>
+                  <button onClick="{{ f.act.closePanel }}" style="background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:500;color:#52525B">Cancelar</button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ f.hasPara }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;gap:13px;padding:13px 20px 13px 26px;background:#FCFCFD;border-bottom:1px solid #F4F4F5">
+              <span style="color:#CBCBD0;font-size:13px;font-weight:700;flex:0 0 auto;padding-top:1px">§</span>
+              <span style="font-size:13px;line-height:1.6;color:#9CA3AF">{{ f.paraAfter }}</span>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <!-- footer -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-top:1px solid #EFEFF1;background:#FCFCFD;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#A1A1AA;flex-wrap:wrap">
+          <span style="font-family:'Geist Mono',monospace;padding:2px 7px;border:1px solid #E4E4E7;border-radius:5px;background:#fff;font-size:11px;font-weight:600;color:#71717A">J / K</span><span>navegar</span>
+          <span style="font-family:'Geist Mono',monospace;padding:2px 7px;border:1px solid #E4E4E7;border-radius:5px;background:#fff;font-size:11px;font-weight:600;color:#71717A">A</span><span>aplicar</span>
+          <span style="font-family:'Geist Mono',monospace;padding:2px 7px;border:1px solid #E4E4E7;border-radius:5px;background:#fff;font-size:11px;font-weight:600;color:#71717A">E</span><span>editar</span>
+          <span style="font-family:'Geist Mono',monospace;padding:2px 7px;border:1px solid #E4E4E7;border-radius:5px;background:#fff;font-size:11px;font-weight:600;color:#71717A">P</span><span>pular</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button onClick="{{ newReview }}" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:500;color:#3F3F46" style-hover="background:#F4F4F5"><span style="font-size:13px">↻</span>Nova Revisão</button>
+          <button onClick="{{ reset }}" style="background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:500;color:#52525B" style-hover="background:#F4F4F5">Resetar</button>
+          <button onClick="{{ exportJson }}" style="background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:500;color:#52525B" style-hover="background:#F4F4F5">Exportar JSON</button>
+          <button onClick="{{ saveDocs }}" style="background:#15803D;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:7px" style-hover="background:#166534"><span style="width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,.22);border-radius:3px;font-size:9px">D</span>Gravar no Google Docs</button>
+          <div style="width:1px;height:24px;background:#E4E4E7;margin:0 2px"></div>
+          <button disabled style="display:inline-flex;align-items:center;gap:6px;background:#FAFAFA;border:1px solid #EFEFF1;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:500;color:#C4C4C8">← Roteiro anterior</button>
+          <button onClick="{{ nextRoteiro }}" style="display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid #BFDBFE;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600;color:#1D4ED8;max-width:260px" style-hover="background:#EFF6FF">
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Próximo roteiro · {{ nextName }}</span>
+            <span style="flex:0 0 auto">→</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#18181B;color:#fff;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:0 8px 30px rgba(0,0,0,.28);z-index:50">{{ toast }}</div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    status: {},
+    panel:  {},
+    edited: {},
+    toast: null,
+  };
+
+  nextName = 'Estados Unidos copiam modelo do Ceará';
+
+  findings = [
+    { id:'f1', n:1, sev:'aviso', cats:['Hook'], why:'Hook mais direto e com número exato; "desperdiça" aumenta a tensão.', seg:[
+      { k:'same', t:'Enquanto o ' },
+      { k:'del', t:'governo investe bilhões de reais em medidas pra tentar controlar a contaminação da' },
+      { k:'ins', t:'Brasil desperdiça bilhões contra a' },
+      { k:'same', t:' dengue, dois adolescentes do ' },
+      { k:'del', t:'litoral leste do Ceará descobriram a solução por trinta e seis centavos' },
+      { k:'ins', t:'Ceará resolveram o problema por R$ 0,36' },
+      { k:'same', t:'.' },
+    ], paraAfter:'E o mais impressionante é que eles fizeram isso a partir de um material que todo mundo chamava de lixo.' },
+
+    { id:'f2', n:2, sev:'aviso', cats:['Fact-check'], why:'População aproximada — IBGE 2022 ≈ 70 mil habitantes.', seg:[
+      { k:'same', t:'Karol Canuto e Kauã Albuquerque cresceram em Cascavel, uma cidade de ' },
+      { k:'del', t:'76' },
+      { k:'ins', t:'aproximadamente 70' },
+      { k:'same', t:' mil habitantes no litoral do Ceará. Cidade de praia, de feira, de calor o ano inteiro e de água parada em todo quintal.' },
+    ] },
+
+    { id:'f3', n:3, sev:'aviso', cats:['Coerência','Clareza/Ritmo','Fact-check'], why:'"Surto" é o termo técnico correto; "notificados" alinha com a vigilância.', seg:[
+      { k:'same', t:'Por causa disso, Cascavel conhecia bem a dengue. ' },
+      { k:'del', t:'Em 2024, a cidade viveu uma epidemia, com' },
+      { k:'ins', t:'Mas em 2024, a cidade registrou surto com' },
+      { k:'same', t:' mais de 500 casos confirmados e outros 1.500 ' },
+      { k:'del', t:'sob investigação, num único ano.' },
+      { k:'ins', t:'notificados. Num único ano,' },
+      { k:'same', t:' Karol e Kauã viram isso de perto e decidiram agir.' },
+    ], paraAfter:'Os dois estudavam na Marconi Coelho Reis, escola pública de tempo integral, onde tinha uma planta que cresce em todo canto do Nordeste: o pinhão roxo.' },
+
+    { id:'f4', n:4, sev:'aviso', cats:['Fact-check'], why:'Atribuição vaga; evitar citar instituição não confirmada.', seg:[
+      { k:'del', t:'Pesquisadores da Universidade Estadual do Piauí' },
+      { k:'ins', t:'Estudos científicos' },
+      { k:'same', t:' já tinham mostrado, em laboratório, que as folhas do pinhão roxo eram capazes de matar larvas do Aedes aegypti.' },
+    ] },
+
+    { id:'f5', n:5, sev:'sugestao', cats:['Clareza/Ritmo'], why:'Linguagem mais ativa e correção geográfica (estado → Ceará).', seg:[
+      { k:'same', t:'Hoje, a fórmula ' },
+      { k:'del', t:'desenvolvida por eles está sendo testada' },
+      { k:'ins', t:'criada pelos dois já está em teste' },
+      { k:'same', t:' em outras cidades do ' },
+      { k:'del', t:'estado' },
+      { k:'ins', t:'Ceará' },
+      { k:'same', t:'.' },
+    ] },
+
+    { id:'f6', n:6, sev:'bloqueante', cats:['Fact-check'], why:'Alegação de 100% sem evidência — risco factual alto. Bloqueia a aprovação.', seg:[
+      { k:'del', t:'O produto elimina 100% das larvas em qualquer ambiente, segundo os estudantes.' },
+      { k:'ins', t:'Em laboratório, o extrato eliminou a maior parte das larvas; o resultado ainda não foi validado em campo.' },
+    ] },
+
+    { id:'f7', n:7, sev:'nota', cats:['Coerência'], why:'Detalhe adicional, baixo impacto.', seg:[
+      { k:'same', t:'A descoberta rendeu prêmios em feiras de ciências' },
+      { k:'ins', t:' nacionais e internacionais' },
+      { k:'same', t:'.' },
+    ] },
+  ];
+
+  setStatus(id,val){ this.setState(s=>({ status:{...s.status,[id]:val} })); }
+  setPanel(id,val){ this.setState(s=>({ panel:{...s.panel,[id]:val} })); }
+  setEdited(id,val){ this.setState(s=>({ edited:{...s.edited,[id]:val} })); }
+  reset(){ this.setState({ status:{}, panel:{} }); }
+  flash(msg){ this.setState({ toast:msg }); clearTimeout(this._t); this._t = setTimeout(()=> this.setState({ toast:null }), 2400); }
+
+  renderVals(){
+    const R = React;
+    const SEV = {
+      bloqueante:{ label:'Bloqueante', accent:'#DC2626', chipBg:'#FEF2F2', chipText:'#B91C1C', dot:'#DC2626' },
+      aviso:{ label:'Aviso', accent:'#E0A106', chipBg:'#FEFBEB', chipText:'#B45309', dot:'#E0A106' },
+      sugestao:{ label:'Sugestão', accent:'#2563EB', chipBg:'#EFF6FF', chipText:'#1D4ED8', dot:'#2563EB' },
+      nota:{ label:'Nota', accent:'#A1A1AA', chipBg:'#F4F4F5', chipText:'#52525B', dot:'#A1A1AA' },
+    };
+    const insStyle = { background:'rgba(22,163,74,0.14)', color:'#15803D', borderRadius:'3px', padding:'0 2px', fontWeight:600, WebkitBoxDecorationBreak:'clone', boxDecorationBreak:'clone' };
+    const delStyle = { color:'#B91C1C', textDecoration:'line-through', textDecorationColor:'rgba(185,28,28,0.45)', opacity:0.7 };
+    const mkBefore = seg => R.createElement('span', null, seg.filter(s=>s.k!=='ins').map((s,i)=> R.createElement('span',{key:i}, s.t)));
+    const mkAfter  = seg => R.createElement('span', null, seg.filter(s=>s.k!=='del').map((s,i)=> s.k==='ins' ? R.createElement('mark',{key:i,style:insStyle}, s.t) : R.createElement('span',{key:i}, s.t)));
+    const plainAfter = seg => seg.filter(s=>s.k!=='del').map(s=>s.t).join('');
+
+    const vstate = (f) => {
+      const st = this.state.status[f.id] || 'pending';
+      const panel = this.state.panel[f.id] || null;
+      const ev = this.state.edited[f.id];
+      return {
+        applied: st==='applied', skipped: st==='skipped', pending: st==='pending',
+        isEdit: panel==='edit', isTeach: panel==='teach',
+        editVal: ev==null ? plainAfter(f.seg) : ev,
+        beforeStyle: { opacity: st==='applied'?0.4 : st==='skipped'?0.5 : 1, transition:'opacity .2s' },
+        afterStyle:  { opacity: st==='skipped'?0.5 : 1, transition:'opacity .2s' },
+        apply: ()=> this.setStatus(f.id,'applied'),
+        skip:  ()=> this.setStatus(f.id, st==='skipped'?'pending':'skipped'),
+        undo:  ()=> this.setStatus(f.id,'pending'),
+        toggleEdit: ()=> this.setPanel(f.id, panel==='edit'?null:'edit'),
+        toggleTeach:()=> this.setPanel(f.id, panel==='teach'?null:'teach'),
+        closePanel: ()=> this.setPanel(f.id,null),
+        onEdit: (e)=> this.setEdited(f.id, e.target.value),
+        saveEdit: ()=> { this.setStatus(f.id,'applied'); this.setPanel(f.id,null); },
+        saveTeach:()=> { this.setPanel(f.id,null); this.flash('Preferência registrada — o agente vai aprender ✓'); },
+      };
+    };
+
+    const findings = this.findings.map(f => {
+      const s = SEV[f.sev];
+      return {
+        id:f.id, n:f.n, why:f.why, cats:f.cats,
+        sevLabel:s.label,
+        sevChipStyle:{ display:'inline-flex', alignItems:'center', gap:'5px', padding:'2px 9px 2px 8px', borderRadius:'999px', background:s.chipBg, color:s.chipText, fontSize:'11px', fontWeight:600, whiteSpace:'nowrap', lineHeight:'1.5' },
+        sevDotStyle:{ width:'7px', height:'7px', borderRadius:'999px', background:s.dot, flex:'0 0 auto' },
+        barStyle:{ position:'absolute', left:'0', top:'0', bottom:'0', width:'3px', background:s.accent },
+        beforeEl: mkBefore(f.seg), afterEl: mkAfter(f.seg),
+        hasPara: !!f.paraAfter, paraAfter: f.paraAfter || '',
+        act: vstate(f),
+      };
+    });
+
+    const cnt = (val)=> this.findings.filter(f => (this.state.status[f.id]||'pending')===val).length;
+    const done = cnt('applied'); const total = this.findings.length; const skipped = cnt('skipped');
+    const pct = Math.round(done/total*100);
+    const prog = { done, total, skipped, pending: total-done-skipped, pct, fillStyle:{ width:pct+'%', height:'100%', background:'#16A34A', borderRadius:'999px', transition:'width .35s ease' } };
+
+    const order = ['bloqueante','aviso','sugestao','nota'];
+    const legend = order.map(k=>({ label:SEV[k].label, count:this.findings.filter(f=>f.sev===k).length, dotStyle:{ width:'7px', height:'7px', borderRadius:'999px', background:SEV[k].dot } })).filter(x=>x.count>0);
+
+    return {
+      findings, legend, prog,
+      total:this.findings.length,
+      nextName:this.nextName,
+      toast:this.state.toast, hasToast:!!this.state.toast,
+      saveDocs: ()=> this.flash('Roteiro gravado no Google Docs ✓'),
+      exportJson: ()=> this.flash('JSON exportado ✓'),
+      newReview: ()=> { this.reset(); this.flash('Nova revisão iniciada ✓'); },
+      nextRoteiro: ()=> this.flash('Abrindo: ' + this.nextName + ' →'),
+      reset: ()=> this.reset(),
+    };
+  }
+}
+</script>
+</body>
+</html>
