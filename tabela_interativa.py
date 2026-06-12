@@ -941,7 +941,8 @@ _HTML = r"""<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script>
 // Tema antes do primeiro paint (evita flash). Padrão: claro.
-document.documentElement.dataset.theme=localStorage.getItem('vml_tema')||'claro';
+// sessionStorage: toda aba nova abre no claro; o toggle vale só para a sessão
+document.documentElement.dataset.theme=sessionStorage.getItem('vml_tema')||'claro';
 </script>
 <style>
 :root{
@@ -1129,8 +1130,8 @@ button{font-family:var(--sans)}
 .dep-text{font-size:13.5px;line-height:1.6;color:var(--tx)}
 mark.ins{background:var(--ins-bg);color:var(--ins-tx);font-weight:600;border-radius:3px;
   padding:0 2px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
-.fwhy{margin-top:8px;font-size:12px;line-height:1.55;color:var(--tx-4);white-space:pre-wrap}
-.fwhy::before{content:'✦ ';color:var(--tx-dis)}
+.tag-c[data-w]{cursor:help}
+.tag-c[data-w]:hover{border-color:var(--tx-5);color:var(--tx)}
 .diff-null{color:var(--tx-4);font-size:12px;font-style:italic}
 
 /* Clamp de 3 linhas + "ver tudo" (conteúdo nunca fica inacessível) */
@@ -1385,7 +1386,7 @@ const panels = {};
 // ── Tema claro/escuro ────────────────────────────────────────────────────────
 function aplicarTema(t){
   document.documentElement.dataset.theme=t;
-  localStorage.setItem('vml_tema',t);
+  sessionStorage.setItem('vml_tema',t);
   document.querySelectorAll('#tema-toggle .tt-opt')
     .forEach(o=>o.classList.toggle('ativo',o.dataset.t===t));
 }
@@ -1479,11 +1480,22 @@ function renderDiff(c){
   return[`<div class="clamp">${esc(t)}</div>`,depH];
 }
 
+// Justificativa da camada: linha consolidada tem porque combinado no formato
+// "[Camada] texto\n\n[Camada2] texto" — cada chip mostra só a sua parte no hover
+function whyDe(c,t){
+  if(!c.porque)return'';
+  const sec=c.porque.split(/\n\n(?=\[)/).find(s=>s.startsWith(`[${t}]`));
+  return sec?sec.slice(t.length+3):c.porque;
+}
+
 function renderCat(c){
   const k=SEV_KEY[c.severidade]||'s';
   const pill=`<span class="sev-pill sp-${k}">${SEV_LABEL[c.severidade]||'Sugestão'}</span>`;
   const tags=(c.camadas&&c.camadas.length?c.camadas:[c.camada])
-    .map(t=>`<span class="tag-c">${esc(t)}</span>`).join('');
+    .map(t=>{
+      const w=whyDe(c,t);
+      return`<span class="tag-c"${w?` data-w="${esc(w)}"`:''}>${esc(t)}</span>`;
+    }).join('');
   const ins=c.insercao_label?`<div class="ins-label">${esc(c.insercao_label)}</div>`:'';
   return`${pill}<div class="cat-chips">${tags}</div>${ins}`;
 }
@@ -1537,12 +1549,11 @@ function rowInner(c){
   if(c.decisao&&c.decisao!=='pular')cls+=' applied';
   else if(c.decisao==='pular')cls+=' skipped';
   const[antH,depH]=renderDiff(c);
-  const why=c.porque?`<div class="fwhy clamp">${esc(c.porque)}</div>`:'';
   return`<div class="${cls}">
     <div class="fnum">${c._num||''}</div>
     <div class="fcat">${renderCat(c)}</div>
     <div class="fantes" id="ant-${c.id}">${antH}</div>
-    <div class="fdepois" id="dep-${c.id}">${depH}${why}</div>
+    <div class="fdepois" id="dep-${c.id}">${depH}</div>
     <div class="facao" id="ac-${c.id}">${renderAcao(c)}</div>
   </div>${renderPanel(c)}`;
 }
