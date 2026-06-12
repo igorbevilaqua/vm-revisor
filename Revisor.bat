@@ -7,6 +7,19 @@ echo  Revisor de Roteiros - Viral Media Labs
 echo ============================================
 echo.
 
+:: Detecta o comando Python disponivel (py > python > python3)
+set PYCMD=
+where py >nul 2>&1 && set PYCMD=py
+if not defined PYCMD (where python >nul 2>&1 && set PYCMD=python)
+if not defined PYCMD (where python3 >nul 2>&1 && set PYCMD=python3)
+if not defined PYCMD (
+    echo ERRO: Python nao encontrado.
+    echo Instale em https://www.python.org/downloads/
+    echo IMPORTANTE: marque a opcao "Add Python to PATH" durante a instalacao.
+    pause
+    exit /b 1
+)
+
 :: Carrega a API key do config.txt (se nao estiver no ambiente)
 if not "%ANTHROPIC_API_KEY%"=="" goto :temchave
 
@@ -39,7 +52,7 @@ echo Abrindo a interface no navegador...
 echo (mantenha esta janela aberta durante a revisao)
 echo.
 
-python interface.py
+%PYCMD% interface.py
 
 echo.
 pause

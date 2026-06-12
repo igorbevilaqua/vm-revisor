@@ -4,8 +4,12 @@ echo  Instalando o Revisor de Roteiros...
 echo ============================================
 echo.
 
-python --version >nul 2>&1
-if errorlevel 1 (
+:: Detecta o comando Python disponivel (py > python > python3)
+set PYCMD=
+where py >nul 2>&1 && set PYCMD=py
+if not defined PYCMD (where python >nul 2>&1 && set PYCMD=python)
+if not defined PYCMD (where python3 >nul 2>&1 && set PYCMD=python3)
+if not defined PYCMD (
     echo ERRO: Python nao encontrado.
     echo.
     echo Instale o Python em: https://www.python.org/downloads/
@@ -16,7 +20,7 @@ if errorlevel 1 (
 )
 
 echo Instalando dependencias...
-pip install -r requirements.txt
+%PYCMD% -m pip install -r requirements.txt
 
 echo.
 echo ============================================
