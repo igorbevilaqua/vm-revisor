@@ -144,6 +144,9 @@ class AgenteBase:
     def __init__(self):
         self.client = anthropic.Anthropic()
         self.preferencias = carregar_preferencias()
+        # Contexto do roteiro em revisão (cliente/tema/estrutura) — setado por
+        # processar_roteiro antes de analisar(); filtra os aprendizados injetados.
+        self.filtro_aprendizados = {}
 
     # ── Data atual injetada em todo system prompt (âncora para fact-check) ──────
     def _bloco_data_atual(self) -> str:
@@ -178,14 +181,31 @@ class AgenteBase:
         return cabeca + MARCADOR_APRENDIDO + "\n".join(linhas)
 
     def _bloco_preferencias(self) -> str:
-        if not self.preferencias:
+        # Nova estrutura: aprendizados.json indexado por contexto — cada agente
+        # recebe só o que é relevante para a camada dele + cliente/tema/estrutura
+        # do roteiro atual. Enquanto o arquivo não existir (migração não rodada),
+        # cai no legado: preferencias.md inteiro.
+        corpo = None
+        try:
+            import aprendizados
+            f = self.filtro_aprendizados or {}
+            corpo = aprendizados.corpo_para_prompt(
+                camada=self.CAMADA, cliente=f.get("cliente", ""),
+                tema=f.get("tema", ""), estrutura=f.get("estrutura", ""))
+        except Exception:
+            corpo = None  # qualquer falha na nova estrutura nunca derruba o agente
+        if corpo is None:
+            if not self.preferencias:
+                return ""
+            corpo = self._preferencias_filtradas()
+        if not corpo.strip():
             return ""
         return (
             "\n## REGRAS DA CASA (preferências do editor — prioridade máxima)\n"
             "As regras abaixo foram definidas pelo editor humano e têm prioridade sobre\n"
             "qualquer recomendação genérica. NÃO sugira nada que as contrarie. Se um achado\n"
             "seu seria rejeitado por essas regras, não o inclua.\n\n"
-            f"{self._preferencias_filtradas()}\n"
+            f"{corpo}\n"
         )
 
     # ── Bloco de calibração injetado em todo system prompt estruturado ────────

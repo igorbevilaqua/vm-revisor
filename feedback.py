@@ -94,7 +94,12 @@ def gerar_regras(rejeitados: list[dict]) -> list[str]:
 
 
 def carregar_regras_existentes() -> list[str]:
-    """Regras já gravadas na seção [10] (ignora comentários HTML e placeholders)."""
+    """Regras já gravadas (para a checagem de conflito). Lê da nova estrutura
+    (aprendizados.json) quando ela existe; senão, da seção [10] legada."""
+    import aprendizados
+    if aprendizados.existe():
+        return [a["texto"].replace("\n", " ")[:200]
+                for a in aprendizados.carregar() if a.get("ativo", True)]
     if not PREFERENCIAS_PATH.exists():
         return []
     texto = PREFERENCIAS_PATH.read_text(encoding="utf-8")
@@ -147,7 +152,7 @@ def detectar_conflitos(novas: list[str], existentes: list[str]) -> list[str | No
 
 
 def acrescentar_preferencias(regras_datadas: list[str]):
-    """Acrescenta linhas '- [YYYY-MM-DD] regra' ao FIM da seção [10] (a última do arquivo)."""
+    """LEGADO: acrescenta linhas '- [YYYY-MM-DD] regra' ao FIM da seção [10]."""
     texto = PREFERENCIAS_PATH.read_text(encoding="utf-8") if PREFERENCIAS_PATH.exists() else ""
     bloco = "\n".join(regras_datadas)
     if MARCADOR_SECAO in texto:
@@ -155,6 +160,27 @@ def acrescentar_preferencias(regras_datadas: list[str]):
     else:
         texto = texto.rstrip() + f"\n\n{MARCADOR_SECAO}\n\n{bloco}\n"
     PREFERENCIAS_PATH.write_text(texto, encoding="utf-8")
+
+
+def salvar_regras(regras: list[str], origem: str = "pular") -> str:
+    """Grava regras destiladas na nova estrutura (aprendizados.json, escopo
+    global). Enquanto a migração não foi rodada (arquivo não existe), mantém o
+    comportamento legado: seção [10] do preferencias.md. Retorna o nome do
+    arquivo de destino (para as mensagens ao usuário)."""
+    import aprendizados
+    if aprendizados.existe():
+        aprendizados.adicionar([
+            {"texto": r, "escopo": "global", "origem": origem} for r in regras
+        ])
+        try:
+            import git_sync
+            git_sync.enviar(mensagem=f"aprendizados: +{len(regras)} (feedback)")
+        except Exception:
+            pass
+        return aprendizados.ARQUIVO.name
+    data = datetime.now().strftime("%Y-%m-%d")
+    acrescentar_preferencias([f"- [{data}] {r}" for r in regras])
+    return PREFERENCIAS_PATH.name
 
 
 def parse_indices(entrada: str, total: int) -> list[int]:
@@ -209,7 +235,6 @@ def main():
     existentes = carregar_regras_existentes()
     conflitos = detectar_conflitos(novas, existentes)
 
-    data = datetime.now().strftime("%Y-%m-%d")
     a_gravar = []
     for regra, conflito in zip(novas, conflitos):
         if conflito:
@@ -223,15 +248,15 @@ def main():
             else:
                 print("    ↪ modo não-interativo: gravando mesmo assim "
                       "(rode sem --rejeitar para revisar manualmente).")
-        a_gravar.append(f"- [{data}] {regra}")
+        a_gravar.append(regra)
 
     if not a_gravar:
-        print("\nNenhuma regra nova adicionada. preferencias.md inalterado.")
+        print("\nNenhuma regra nova adicionada.")
         return
 
-    acrescentar_preferencias(a_gravar)
-    print(f"\n✅ Regras adicionadas à seção [10] de {PREFERENCIAS_PATH.name}:\n")
-    print("\n".join(a_gravar))
+    destino = salvar_regras(a_gravar, origem="pular")
+    print(f"\n✅ Regras adicionadas a {destino}:\n")
+    print("\n".join(f"- {r}" for r in a_gravar))
     print("\nNas próximas revisões, os agentes já vão respeitar essas regras.")
 
 

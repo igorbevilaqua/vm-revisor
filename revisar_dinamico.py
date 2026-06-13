@@ -468,8 +468,7 @@ def loop_aprendizado(ensinamentos):
         a["porque"] = f"{e.get('porque', '')} | {contexto}"
         achados_para_regra.append(a)
 
-    from feedback import gerar_regras, carregar_regras_existentes, detectar_conflitos, acrescentar_preferencias
-    from datetime import datetime
+    from feedback import gerar_regras, carregar_regras_existentes, detectar_conflitos, salvar_regras
 
     print(f"\n🧠 Destilando {len(achados_para_regra)} ensinamento(s) em regras...")
     novas = gerar_regras(achados_para_regra)
@@ -479,7 +478,6 @@ def loop_aprendizado(ensinamentos):
 
     existentes = carregar_regras_existentes()
     conflitos  = detectar_conflitos(novas, existentes)
-    data = datetime.now().strftime("%Y-%m-%d")
     a_gravar = []
 
     for regra, conflito in zip(novas, conflitos):
@@ -489,13 +487,13 @@ def loop_aprendizado(ensinamentos):
             resp = input("   Adicionar mesmo assim? [s/n] → ").strip().lower()
             if resp != "s":
                 continue
-        a_gravar.append(f"- [{data}] {regra}")
+        a_gravar.append(regra)
 
     if a_gravar:
-        acrescentar_preferencias(a_gravar)
-        print(verde(f"\n✅ {len(a_gravar)} regra(s) adicionada(s) ao preferencias.md:"))
+        destino = salvar_regras(a_gravar, origem="pular")
+        print(verde(f"\n✅ {len(a_gravar)} regra(s) adicionada(s) ao {destino}:"))
         for r in a_gravar:
-            print(f"   {r}")
+            print(f"   - {r}")
         print(cinza("   Nas próximas revisões os agentes já respeitam essas regras."))
     else:
         print("Nenhuma regra adicionada.")

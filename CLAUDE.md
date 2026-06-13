@@ -13,6 +13,7 @@ importância % e prioridade (⛔ Obrigatória / ✨ Opcional).
 ```
 roteiro-revisor/
 ├── CLAUDE.md                ← este arquivo (instruções para você, Claude Code)
+├── ATUALIZACOES.md          ← changelog: PENDENTES→PUBLICADAS; "gerar mensagem de update" anuncia aos sócios e zera pendentes (protocolo no topo do arquivo)
 ├── preferencias.md          ← REGRAS DA CASA: guia de estilo do editor, injetado em todo agente
 ├── revisar.py               ← script principal — PONTO DE ENTRADA
 ├── interface.py             ← interface gráfica: URL do Doc + progresso real dos agentes → Tabela Interativa

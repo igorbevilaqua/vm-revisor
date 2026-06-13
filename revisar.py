@@ -142,6 +142,16 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
         "cta":          AgenteCTA(pdfs.get("cta", ""), cliente=cliente or ""),
     }
 
+    # Contexto do roteiro → filtro dos aprendizados injetados em cada agente
+    # (globais + do cliente atual + do tema/estrutura quando identificáveis)
+    filtro_apr = {
+        "cliente": cliente or "",
+        "tema": (contexto or {}).get("tema", "") or "",
+        "estrutura": (contexto or {}).get("estrutura", "") or "",
+    }
+    for ag in agentes.values():
+        ag.filtro_aprendizados = filtro_apr
+
     # Fact-check só roda se houver algo verificável (nº, data, %, valor) — economiza chamada
     if "factcheck" in agentes and not tem_fato_verificavel(texto):
         del agentes["factcheck"]
@@ -180,6 +190,7 @@ async def processar_roteiro(roteiro, pdfs, verbose=True, cliente=None, verificar
         print(f"  📋 Consolidando relatório final...")
 
     consolidador = AgenteConsolidador()
+    consolidador.filtro_aprendizados = filtro_apr
     consolidado = await consolidador.consolidar(
         roteiro=texto_com_contexto,
         titulo=titulo,
@@ -483,9 +494,17 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
         return
 
     from tabela_interativa import (
-        transformar_roteiro, TabelaServer,
-        aplicar_decisoes_no_payload, decisoes_para_ensinamentos,
+        transformar_roteiro, TabelaServer, aplicar_decisoes_no_payload,
     )
+
+    # Puxa os aprendizados que os outros revisores ensinaram, ANTES de rodar os
+    # agentes — assim a injeção já usa o conhecimento compartilhado mais recente.
+    try:
+        import git_sync
+        if git_sync.puxar():
+            print("   🔄 Aprendizados sincronizados (git pull).")
+    except Exception:
+        pass
 
     pasta_relatorios = Path(__file__).parent / "relatorios"
     pasta_relatorios.mkdir(exist_ok=True)
@@ -568,14 +587,8 @@ async def modo_tabela(roteiros, pdfs, args, url_gdocs):
     server.finalizar()
     print(f"\n🧩 JSON salvo: {arquivo_json}")
     print("\n🎉 Tabela Interativa concluída.")
-
-    # Decisões da tabela alimentam o loop de aprendizado (igual ao modo dinâmica)
-    from revisar_dinamico import loop_aprendizado
-    ensinamentos = decisoes_para_ensinamentos(
-        _payload_json(todos_resultados), server.decisoes, server.motivos
-    )
-    if ensinamentos:
-        loop_aprendizado(ensinamentos)
+    # Aprendizado: absorvido pela janela de revisão de aprendizados na própria
+    # tabela (abre no Gravar do último roteiro) — sem prompt de terminal aqui.
 
 
 def _porta_livre(inicio: int = 7432) -> int:

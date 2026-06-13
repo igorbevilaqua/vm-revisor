@@ -536,6 +536,7 @@ def transformar_roteiro(roteiro_raw, url_gdocs="", meta=None):
             "score_geral": cons.get("nota_geral", 0),
         },
         "url_gdocs": url_gdocs or "",
+        "contexto": roteiro_raw.get("contexto") or {},
         "paragrafos": paragrafos_raw,
         "linhas": linhas,
         "correcoes": correcoes,
@@ -566,43 +567,6 @@ def aplicar_decisoes_no_payload(payload, decisoes, motivos=None):
                 if m:
                     achados[idx]["motivo_decisao"] = m
     return payload
-
-
-def decisoes_para_ensinamentos(roteiros_raw, decisoes, motivos=None):
-    """Converte as decisões da sessão da tabela em ensinamentos no MESMO formato do
-    modo dinâmica (consumidos por revisar_dinamico.loop_aprendizado):
-      - pular                       → {**achado, "_tipo_decisao": "pular", "_motivo": ...}
-      - editada (≠ correcao, ≠ 'aplicado') → {**achado, "_tipo_decisao": "editar", ...}
-    Aplicar sem mudança não vira ensinamento (não tem sinal)."""
-    motivos = motivos or {}
-    ensinamentos = []
-    for rot in roteiros_raw:
-        rid = f"rot_{rot.get('numero', 1):02d}"
-        dec_map = decisoes.get(rid) or {}
-        if not dec_map:
-            continue
-        achados = rot.get("consolidado", {}).get("achados", [])
-        for aid, decisao in dec_map.items():
-            try:
-                idx = int(aid.lstrip("c")) - 1
-            except ValueError:
-                continue
-            if not (0 <= idx < len(achados)):
-                continue
-            achado = achados[idx]
-            motivo = (motivos.get(rid) or {}).get(aid, "")
-            correcao = (achado.get("correcao") or "").strip()
-            if decisao == "pular":
-                ensinamentos.append({**achado, "_tipo_decisao": "pular", "_motivo": motivo})
-            elif decisao and decisao != "aplicado" and decisao.strip() != correcao:
-                ensinamentos.append({
-                    **achado,
-                    "_tipo_decisao": "editar",
-                    "_correcao_original": correcao,
-                    "_versao_usuario": decisao,
-                    "_motivo": motivo,
-                })
-    return ensinamentos
 
 
 # ─── Servidor Flask ───────────────────────────────────────────────────────────
@@ -745,6 +709,128 @@ class TabelaServer:
             server._next_event.set()  # desbloqueia sem esperar
             return jsonify({"ok": True})
 
+        @app.route("/api/bob", methods=["POST"])
+        def api_bob():
+            """Acionamento do ✦ Bob: reescreve um trecho a partir do feedback do
+            revisor. Registra o evento no ledger (sinal cru); o aprendizado
+            destilado entra na janela do fim da sessão, com aval do editor."""
+            data = request.get_json() or {}
+            trecho = (data.get("trecho_original") or "").strip()
+            feedback = (data.get("feedback") or "").strip()
+            if not feedback:
+                return jsonify({"error": "Feedback é obrigatório para o Bob reescrever."}), 400
+            sugestao = (data.get("sugestao_anterior") or "").strip()
+            agente = (data.get("agente") or "").strip()
+            cliente = server.dados_atual.get("roteiro", {}).get("cliente", "") or ""
+            ctx = server.dados_atual.get("contexto") or {}
+            try:
+                from agentes.bob import AgenteBob
+                res = AgenteBob().reescrever(
+                    trecho_original=trecho, sugestao_anterior=sugestao, feedback=feedback,
+                    agente_origem=agente, cliente=cliente,
+                    tema=ctx.get("tema", "") or "", estrutura=ctx.get("estrutura", "") or "",
+                )
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+            # Ledger: sinal cru do acionamento (fundação do aprendizado)
+            try:
+                import ledger
+                ledger.registrar({
+                    "origem": "bob",
+                    "cliente": cliente,
+                    "roteiro_titulo": server.dados_atual.get("roteiro", {}).get("titulo", ""),
+                    "estrutura_codex": ctx.get("estrutura", "") or "",
+                    "camada": agente,
+                    "trecho": trecho,
+                    "correcao_agente": sugestao,
+                    "versao_usuario": res.get("reescrita", ""),
+                    "decisao": "esclarecer" if res.get("precisa_esclarecer") else "bob_reescreveu",
+                    "motivo": feedback,
+                })
+            except Exception:
+                pass
+            return jsonify(res)
+
+        @app.route("/api/aprendizados/candidatos", methods=["POST"])
+        def api_aprendizados_candidatos():
+            """Compila os sinais da sessão inteira (pular/editar/aplicar dos achados
+            + edições de linhas de leitura §) e extrai a lição de cada um (1 LLM
+            call). Chamado pelo front no Gravar do último roteiro."""
+            data = request.get_json() or {}
+            # Edições de linha de leitura vêm do front (vivem no localStorage, não
+            # nos achados). Anexa o contexto do roteiro atual (1 cliente/doc).
+            rot = server.dados_atual.get("roteiro", {})
+            ctx = server.dados_atual.get("contexto") or {}
+            edicoes = []
+            for e in (data.get("edicoes_leitura") or []):
+                if isinstance(e, dict) and e.get("trecho_original") and e.get("decisao"):
+                    edicoes.append({**e, "cliente": rot.get("cliente", ""),
+                                    "tema": ctx.get("tema", ""), "estrutura": ctx.get("estrutura", "")})
+            try:
+                import aprendizados
+                sinais = aprendizados.compilar_sinais(server._roteiros_decididos(), edicoes)
+                if not sinais:
+                    return jsonify({"candidatos": [], "sinais": 0})
+                candidatos = aprendizados.destilar(sinais)
+                return jsonify({"candidatos": candidatos, "sinais": len(sinais)})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/aprendizados/salvar", methods=["POST"])
+        def api_aprendizados_salvar():
+            """Grava os aprendizados confirmados pelo revisor na janela."""
+            data = request.get_json() or {}
+            itens = data.get("aprendizados", [])
+            if not isinstance(itens, list):
+                return jsonify({"error": "formato inválido"}), 400
+            try:
+                import aprendizados
+                salvos = aprendizados.adicionar(itens)
+                if salvos:
+                    try:
+                        import git_sync
+                        git_sync.enviar(mensagem=f"aprendizados: +{len(salvos)} (sessão)")
+                    except Exception:
+                        pass  # sync é best-effort, nunca derruba a gravação
+                return jsonify({"ok": True, "salvos": len(salvos),
+                                "ids": [s["id"] for s in salvos]})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/aprendizados/promocoes", methods=["POST"])
+        def api_aprendizados_promocoes():
+            """Detecta aprendizados de cliente que se repetem entre clientes
+            diferentes (candidatos a virar global). `novos_ids` = os recém-salvos
+            nesta sessão, para não re-sugerir o que já foi ignorado."""
+            data = request.get_json() or {}
+            try:
+                import aprendizados
+                novos = data.get("novos_ids") or None
+                return jsonify({"promocoes": aprendizados.detectar_promocoes(novos)})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/aprendizados/promover", methods=["POST"])
+        def api_aprendizados_promover():
+            """Aplica as promoções confirmadas pelo revisor (cliente → global)."""
+            data = request.get_json() or {}
+            try:
+                import aprendizados
+                n = 0
+                for p in data.get("promover", []):
+                    if aprendizados.promover(p.get("ids", []), p.get("texto_global", ""),
+                                             p.get("camada")):
+                        n += 1
+                if n:
+                    try:
+                        import git_sync
+                        git_sync.enviar(mensagem=f"aprendizados: {n} promovido(s) a global")
+                    except Exception:
+                        pass
+                return jsonify({"ok": True, "promovidos": n})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         return app
 
     # ── Persistência de decisões ───────────────────────────────────────────
@@ -798,6 +884,22 @@ class TabelaServer:
                     break
             except Exception:
                 pass  # self.decisoes em memória segue valendo para o aprendizado
+
+    # ── Sinais da sessão (para a janela de aprendizados) ───────────────────
+    def _roteiros_decididos(self) -> list:
+        """Roteiros do documento com as decisões mais frescas carimbadas.
+        Fonte: o revisao_*.json (persistido a cada clique) + self.decisoes em
+        memória (cobre o intervalo entre o clique e a releitura do arquivo)."""
+        if not self.json_path or not self.json_path.exists():
+            return []
+        try:
+            with self._lock_json:
+                dados = json.loads(self.json_path.read_text(encoding="utf-8"))
+            if isinstance(dados, dict):
+                dados = [dados]
+            return aplicar_decisoes_no_payload(dados, self.decisoes, self.motivos)
+        except Exception:
+            return []
 
     # ── Navegação entre roteiros já revisados ──────────────────────────────
     def _stamp_nav(self):
@@ -909,12 +1011,8 @@ def executar_sessao(roteiros_raw, url_gdocs="", porta=7432, json_path=None):
 
     server.finalizar()
     print("\n🎉 Tabela Interativa encerrada.")
-
-    # Decisões da tabela alimentam o loop de aprendizado (igual ao modo dinâmica)
-    ensinamentos = decisoes_para_ensinamentos(roteiros_raw, server.decisoes, server.motivos)
-    if ensinamentos:
-        from revisar_dinamico import loop_aprendizado
-        loop_aprendizado(ensinamentos)
+    # Aprendizado: absorvido pela janela de revisão de aprendizados (abre no
+    # Gravar do último roteiro) — sem prompt de terminal aqui.
 
 
 # ─── Entrada standalone (CLI) ─────────────────────────────────────────────────
@@ -958,7 +1056,7 @@ document.documentElement.dataset.theme=sessionStorage.getItem('vml_tema')||'clar
   --sev-a:#E0A106;--sev-a-bg:#FEFBEB;--sev-a-tx:#B45309;
   --sev-s:#2563EB;--sev-s-bg:#EFF6FF;--sev-s-tx:#1D4ED8;
   --sev-n:#A1A1AA;--sev-n-bg:#F4F4F5;--sev-n-tx:#52525B;
-  --purple:#7E22CE;--purple-bg:#FAF5FF;--purple-bd:#EBD9FB;--teach-bg:#FBF7FE;
+  --bob:#7C3AED;--bob-bg:#F5F3FF;--bob-bd:#DDD6FE;
   --blue:#1D4ED8;--blue-bd:#BFDBFE;--blue-bg:#EFF6FF;
   --amber:#A16207;--amber-bg:#FEFCE8;--amber-bd:#FDE68A;--amber-dot:#CA8A04;
   --edit-bg:#F6FBF7;--edit-bd:#D6F0DE;
@@ -982,7 +1080,7 @@ document.documentElement.dataset.theme=sessionStorage.getItem('vml_tema')||'clar
   --sev-a:#FBBF24;--sev-a-bg:rgba(251,191,36,.1);--sev-a-tx:#FCD34D;
   --sev-s:#60A5FA;--sev-s-bg:rgba(96,165,250,.1);--sev-s-tx:#93C5FD;
   --sev-n:#71717A;--sev-n-bg:#26262B;--sev-n-tx:#A1A1AA;
-  --purple:#C084FC;--purple-bg:rgba(192,132,252,.08);--purple-bd:#4C2A6E;--teach-bg:#1E1727;
+  --bob:#C084FC;--bob-bg:rgba(192,132,252,.1);--bob-bd:#4C2A6E;
   --blue:#60A5FA;--blue-bd:#1E3A5F;--blue-bg:rgba(96,165,250,.08);
   --amber:#FCD34D;--amber-bg:rgba(202,138,4,.12);--amber-bd:rgba(202,138,4,.35);--amber-dot:#CA8A04;
   --edit-bg:#14201A;--edit-bd:#1F4D33;
@@ -1152,39 +1250,56 @@ mark.ins{background:var(--ins-bg);color:var(--ins-tx);font-weight:600;border-rad
 .btn-aplicar:hover{background:var(--green-h);border-color:var(--green-h)}
 .btn-outline{background:var(--card);color:var(--btn-tx);border-color:var(--bd)}
 .btn-outline:hover{background:var(--box)}
-.btn-teach{background:var(--purple-bg);color:var(--purple);border-color:var(--purple-bd)}
-.btn-teach:hover{filter:brightness(.97)}
 .selo{font-size:12.5px;font-weight:600;text-align:center;padding:4px 0}
 .selo-ap{color:var(--green)}
 .selo-pu{color:var(--tx-4)}
 .lnk{background:none;border:none;font-size:12px;color:var(--tx-3);text-decoration:underline;
   cursor:pointer;padding:2px 0}
 .lnk:hover{color:var(--tx)}
-.lnk-teach{color:var(--purple)}
+/* ✦ Bob: reescritor sob demanda (roxo) */
+.btn-bob{background:var(--bob-bg);color:var(--bob);border-color:var(--bob-bd)}
+.btn-bob:hover{filter:brightness(.97)}
+.lnk-bob{color:var(--bob);text-decoration:none;font-weight:600}
+.lnk-bob:hover{color:var(--bob);text-decoration:underline}
+.ctx-btn.is-bob{color:var(--bob);border-color:var(--bob-bd)}
+.ctx-btn.is-bob:hover{color:var(--bob);background:var(--bob-bg)}
+/* Comentário do Bob acima da reescrita (itálico, roxo) */
+.bob-comment{font-size:12px;font-style:italic;color:var(--bob);line-height:1.5;
+  margin-bottom:6px;display:flex;gap:5px}
+.bob-comment::before{content:'✦';font-style:normal}
 
-/* Painéis edit/teach (linha cheia abaixo do achado) */
+/* Painel edit/bob (linha cheia abaixo do achado) */
 .panel{margin:0 20px 14px;padding:13px 16px 13px 48px;border-radius:10px}
 .panel-edit{background:var(--edit-bg);border:1px solid var(--edit-bd)}
-.panel-teach{background:var(--teach-bg);border:1px solid var(--purple-bd)}
+.panel-bob{background:var(--bob-bg);border:1px solid var(--bob-bd)}
 .p-label{font-size:10.5px;font-weight:700;letter-spacing:.08em;margin-bottom:8px}
 .panel-edit .p-label{color:var(--ins-tx)}
-.panel-teach .p-label{color:var(--purple)}
+.panel-bob .p-label{color:var(--bob)}
 .p-ta{width:100%;min-height:66px;padding:8px 10px;background:var(--card);
   border:1px solid var(--bd);border-radius:8px;color:var(--tx);font-family:var(--sans);
   font-size:13px;line-height:1.55;resize:vertical;outline:none}
 .panel-edit .p-ta:focus{border-color:var(--edit-bd)}
-.p-in{width:100%;padding:8px 10px;background:var(--card);border:1px solid var(--bd);
-  border-radius:8px;color:var(--tx);font-family:var(--sans);font-size:13px;outline:none}
-.p-in:focus{border-color:var(--purple-bd)}
+.panel-bob .p-ta:focus{border-color:var(--bob-bd)}
+.bob-pergunta{font-size:12.5px;font-style:italic;color:var(--bob);line-height:1.5;margin-bottom:8px}
+.btn-bob-go{background:var(--bob);color:#fff;border-color:var(--bob)}
+.btn-bob-go:hover{filter:brightness(.93)}
+.btn-bob-go:disabled{opacity:.5;cursor:not-allowed}
 .p-btns{display:flex;gap:8px;margin-top:9px}
-.btn-teach-save{background:var(--purple);color:#fff;border-color:var(--purple)}
-.btn-teach-save:hover{filter:brightness(.92)}
 
 /* Parágrafo de contexto (leitura sequencial — separador §) */
-.ctx-row{display:grid;grid-template-columns:50px 1fr;gap:18px;padding:10px 20px;
+.ctx-row{display:grid;grid-template-columns:50px 1fr auto;gap:18px;padding:10px 20px;
   background:var(--subtle);border-bottom:1px solid var(--bd4)}
 .ctx-row .fnum{color:var(--tx-dis)}
-.ctx-text{font-size:13px;line-height:1.65;color:var(--ctx);grid-column:2/-1}
+.ctx-text{font-size:13px;line-height:1.65;color:var(--ctx);grid-column:2}
+.ctx-row.ctx-editada .ctx-text{color:var(--tx-2)}
+/* Ações discretas das linhas de leitura: visíveis, mas com peso menor que as
+   das linhas com correção — não competem com a leitura sequencial */
+.ctx-acts{display:flex;gap:6px;align-items:center;align-self:start}
+.ctx-btn{padding:2px 9px;border:1px solid var(--bd2);border-radius:6px;background:transparent;
+  color:var(--tx-4);font-size:11px;font-weight:500;cursor:pointer;white-space:nowrap;
+  transition:all .15s}
+.ctx-btn:hover{color:var(--tx-2);border-color:var(--tx-5);background:var(--card)}
+.ctx-selo{font-size:11px;font-weight:600;color:var(--green);white-space:nowrap}
 
 /* Separador de seção (filtros por severidade) */
 .sec-row{padding:10px 20px;background:var(--box);border-bottom:1px solid var(--bd3);
@@ -1275,6 +1390,57 @@ kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--bd);border-rad
 .np-ok-msg{font-size:11.5px;color:var(--green);line-height:1.5}
 .np-edit{margin-top:8px}
 .np-vazio{font-size:12px;color:var(--tx-4);text-align:center;padding:30px 0}
+
+/* Janela de revisão de aprendizados (abre no Gravar do último roteiro) */
+#apr-modal{display:none;position:fixed;inset:0;z-index:300;background:var(--overlay);
+  align-items:center;justify-content:center;padding:30px}
+#apr-modal.show{display:flex}
+.apr-card{background:var(--card);border:1px solid var(--bd);border-radius:14px;
+  width:min(680px,100%);max-height:86vh;display:flex;flex-direction:column;
+  box-shadow:var(--card-shadow)}
+.apr-head{padding:16px 20px 14px;border-bottom:1px solid var(--bd2)}
+.apr-t{font-size:14px;font-weight:700}
+.apr-sub{font-size:12px;color:var(--tx-3);margin-top:4px;line-height:1.55}
+.apr-body{flex:1;overflow-y:auto;padding:14px 20px;display:flex;
+  flex-direction:column;gap:10px}
+.apr-item{display:grid;grid-template-columns:auto 1fr;gap:10px;background:var(--box);
+  border:1px solid var(--bd2);border-radius:10px;padding:11px 13px}
+.apr-item.off{opacity:.45}
+.apr-check{margin-top:5px;width:15px;height:15px;accent-color:var(--green);cursor:pointer}
+.apr-tx{width:100%;min-height:46px;padding:7px 9px;background:var(--card);
+  border:1px solid var(--bd);border-radius:7px;color:var(--tx);font-family:var(--sans);
+  font-size:12.5px;line-height:1.55;resize:vertical;outline:none}
+.apr-tx:focus{border-color:var(--depois-bd)}
+.apr-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px}
+.apr-esc{padding:3px 7px;border-radius:6px;border:1px solid var(--bd);background:var(--card);
+  color:var(--tx-2);font-size:11px;font-family:var(--sans);outline:none;cursor:pointer}
+.apr-origem{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px;
+  margin-left:auto;white-space:nowrap}
+.apr-o-pular{background:var(--sev-b-bg);color:var(--sev-b-tx)}
+.apr-o-editar{background:var(--blue-bg);color:var(--blue)}
+.apr-o-aplicar{background:var(--edit-bg);color:var(--ins-tx)}
+.apr-o-manual{background:var(--box);color:var(--tx-3);border:1px solid var(--bd2)}
+.apr-add{display:flex;gap:8px;padding:4px 20px 12px}
+.apr-add input{flex:1;padding:8px 10px;background:var(--card);border:1px solid var(--bd);
+  border-radius:8px;color:var(--tx);font-family:var(--sans);font-size:12.5px;outline:none}
+.apr-add input:focus{border-color:var(--depois-bd)}
+.apr-foot{padding:13px 20px;border-top:1px solid var(--bd2);display:flex;gap:8px;
+  align-items:center;justify-content:flex-end}
+.apr-count{font-size:12px;color:var(--tx-3);margin-right:auto}
+.apr-exs{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.apr-ex{font-size:11.5px;color:var(--tx-3);line-height:1.5;border-left:2px solid var(--bd);
+  padding-left:9px;word-break:break-word}
+.apr-ex b{color:var(--tx-2);font-weight:600}
+/* Lição por edição: motivação + trecho de âncora */
+.apr-motiv{font-size:11.5px;color:var(--tx-3);font-style:italic;line-height:1.5;margin-top:6px}
+.apr-trecho{font-size:11px;color:var(--tx-4);line-height:1.5;margin-top:6px;
+  border-left:2px solid var(--bd);padding-left:8px;word-break:break-word}
+/* Bloco recolhido das edições pontuais (não viram regra) */
+.apr-pontuais{margin-top:4px;border-top:1px dashed var(--bd);padding-top:10px}
+.apr-pontuais>summary{font-size:12px;font-weight:600;color:var(--tx-3);cursor:pointer;
+  padding:4px 0;list-style:revert;user-select:none}
+.apr-pontuais>summary:hover{color:var(--tx)}
+.apr-pontuais .apr-item{margin-top:10px}
 
 /* Responsivo: colunas empilham em telas estreitas */
 @media (max-width:920px){
@@ -1373,6 +1539,29 @@ kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--bd);border-rad
   <div class="np-body" id="np-body"></div>
 </div>
 
+<div id="apr-modal">
+  <div class="apr-card">
+    <div class="apr-head">
+      <div class="apr-t" id="apr-t">🧠 Aprendizados desta sessão</div>
+      <div class="apr-sub" id="apr-sub">O sistema destilou as suas decisões neste documento em regras
+        candidatas. Edite o texto, ajuste o escopo e desmarque o que não deve virar regra
+        permanente. Os itens marcados são salvos e passam a valer nas próximas revisões;
+        os desmarcados são descartados.</div>
+    </div>
+    <div class="apr-body" id="apr-lista"></div>
+    <div class="apr-add" id="apr-add">
+      <input id="apr-novo" placeholder="Adicionar aprendizado manualmente…"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();aprAdicionar()}">
+      <button class="btn btn-outline" onclick="aprAdicionar()">+ Adicionar</button>
+    </div>
+    <div class="apr-foot">
+      <span class="apr-count" id="apr-count"></span>
+      <button class="btn btn-outline" id="apr-sec" onclick="aprPular()">Gravar sem salvar</button>
+      <button class="btn btn-aplicar" id="apr-pri" onclick="aprConfirmar()">Salvar e gravar no Docs</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Dados iniciais (embedded no primeiro load) ───────────────────────────────
 let D = __DADOS_JSON__;
@@ -1380,8 +1569,12 @@ const SESSAO = '__SESSAO_ID__';
 // URL do launcher (interface.py) — vazio quando rodando sem a interface gráfica
 const LAUNCHER = '__LAUNCHER_URL__';
 let filtro = 'roteiro';
-// Painel aberto por achado: null | 'edit' | 'teach'
+// Painel aberto por achado: null | 'edit' | 'bob'
 const panels = {};
+// Estado do ✦ Bob
+const _bobState = {};      // id -> {pergunta, busy} (painel de feedback)
+const _bobFeedback = {};   // id -> último feedback dado ao Bob (vira motivo ao aplicar)
+const _bobReescrita = {};  // id de linha de leitura (ed-*) -> {comment, reescrita} p/ pré-preencher a edição
 
 // ── Tema claro/escuro ────────────────────────────────────────────────────────
 function aplicarTema(t){
@@ -1424,12 +1617,30 @@ function salvar(){
   const k=`vml_${SESSAO}_${D.roteiro.id}`;
   const m={};D.correcoes.forEach(c=>{m[c.id]=c.decisao});
   localStorage.setItem(k,JSON.stringify(m));
+  // Edições manuais de linhas de leitura: objetos sintéticos, não existem no
+  // payload do servidor — precisam ser guardados inteiros para sobreviver ao reload
+  const eds=D.correcoes.filter(c=>c.tipo==='edicao'&&c.decisao)
+    .map(c=>({id:c.id,trecho_original:c.trecho_original,decisao:c.decisao,motivo:c._motivo||''}));
+  if(eds.length)localStorage.setItem(k+'_ed',JSON.stringify(eds));
+  else localStorage.removeItem(k+'_ed');
 }
 function carregar(){
   const k=`vml_${SESSAO}_${D.roteiro.id}`;
-  const s=localStorage.getItem(k);if(!s)return;
-  const m=JSON.parse(s);
-  D.correcoes.forEach(c=>{if(c.id in m)c.decisao=m[c.id]});
+  const s=localStorage.getItem(k);
+  if(s){
+    const m=JSON.parse(s);
+    D.correcoes.forEach(c=>{if(c.id in m)c.decisao=m[c.id]});
+  }
+  const se=localStorage.getItem(k+'_ed');
+  if(se){
+    try{
+      JSON.parse(se).forEach(e=>{
+        if(e.decisao&&!getC(e.id))
+          D.correcoes.push({id:e.id,tipo:'edicao',camada:'Editor',
+            trecho_original:e.trecho_original,decisao:e.decisao,_motivo:e.motivo||''});
+      });
+    }catch(_){}
+  }
 }
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
@@ -1462,22 +1673,27 @@ const SEV_LABEL={erro:'Bloqueante',aviso:'Aviso',sugestao:'Sugestão'};
 // ANTES = texto original puro · DEPOIS = texto final com as inserções em <mark>
 function renderDiff(c){
   const t=c.trecho_original;
-  const d=(typeof c.decisao==='string'&&c.decisao!=='pular'&&c.decisao!=='aplicado')
-    ?c.decisao:c.correcao;
-  if(!t&&!d)return['<span class="diff-null">—</span>','<span class="diff-null">—</span>'];
+  const decidida=(typeof c.decisao==='string'&&c.decisao!=='pular'&&c.decisao!=='aplicado');
+  // Enquanto não decidida, uma reescrita do Bob substitui a sugestão do agente
+  const base=(c._bob&&!decidida)?c._bob.reescrita:c.correcao;
+  const d=decidida?c.decisao:base;
+  // Comentário do Bob aparece acima da reescrita (só na proposta, antes de decidir)
+  const bobC=(c._bob&&!decidida)?`<div class="bob-comment">${esc(c._bob.comment)}</div>`:'';
+  const wrap=h=>bobC+h;
+  if(!t&&!d)return['<span class="diff-null">—</span>',wrap('<span class="diff-null">—</span>')];
   if(!t){
     const ant=c.insercao_indefinida
       ?'<span class="diff-null">Posição: a definir pelo editor</span>'
       :'<span class="diff-null">—</span>';
-    return[ant,`<div class="dep-text clamp"><mark class="ins">${esc(d)}</mark></div>`];
+    return[ant,wrap(`<div class="dep-text clamp"><mark class="ins">${esc(d)}</mark></div>`)];
   }
-  if(!d)return[`<div class="clamp">${esc(t)}</div>`,'<span class="diff-null">—</span>'];
+  if(!d)return[`<div class="clamp">${esc(t)}</div>`,wrap('<span class="diff-null">—</span>')];
   const r=diff(t,d);
   // Destaque verde só nas inserções, ancorado no contexto comum (prefixo/sufixo)
   const depH=(r.pfx||r.sfx)&&r.ins
     ?`<div class="dep-text clamp">${esc(r.pfx)}<mark class="ins">${esc(r.ins)}</mark>${esc(r.sfx)}</div>`
     :`<div class="dep-text clamp">${esc(d)}</div>`;
-  return[`<div class="clamp">${esc(t)}</div>`,depH];
+  return[`<div class="clamp">${esc(t)}</div>`,wrap(depH)];
 }
 
 // Justificativa da camada: linha consolidada tem porque combinado no formato
@@ -1504,43 +1720,54 @@ function renderAcao(c){
   const d=c.decisao;
   if(d==='pular')return`<div class="selo selo-pu">Pulado</div>
     <button class="lnk" onclick="desfazer('${c.id}')">Retomar</button>
-    <button class="lnk lnk-teach" onclick="ensinar('${c.id}')">Ensinar</button>`;
+    <button class="lnk lnk-bob" onclick="bob('${c.id}')">✦ Bob</button>`;
   if(d&&d!=='pular')return`<div class="selo selo-ap">✓ Aplicado</div>
     <button class="lnk" onclick="desfazer('${c.id}')">Desfazer</button>
-    <button class="lnk lnk-teach" onclick="ensinar('${c.id}')">Ensinar</button>`;
+    <button class="lnk lnk-bob" onclick="bob('${c.id}')">✦ Bob</button>`;
   // Inserção sem posição: Aplicar fica fora (não há onde aplicar); Editar decide
   const btnAp=c.insercao_indefinida?'':
     `<button class="btn btn-aplicar" onclick="aplicar('${c.id}')">✓ Aplicar</button>`;
   return`${btnAp}
     <button class="btn btn-outline" onclick="editar('${c.id}')">Editar</button>
     <button class="btn btn-outline" onclick="pular('${c.id}')">Pular</button>
-    <button class="btn btn-teach" onclick="ensinar('${c.id}')">Ensinar</button>`;
+    <button class="btn btn-bob" onclick="bob('${c.id}')">✦ Bob</button>`;
 }
 
 function renderPanel(c){
   const p=panels[c.id];
   if(p==='edit'){
-    const txt=typeof c.decisao==='string'&&c.decisao!=='pular'&&c.decisao!=='aplicado'
-      ?c.decisao:(c.correcao||'');
-    return`<div class="panel panel-edit">
-      <div class="p-label">EDITAR TEXTO REVISADO</div>
+    const decidida=typeof c.decisao==='string'&&c.decisao!=='pular'&&c.decisao!=='aplicado';
+    // Editar parte da reescrita do Bob quando ela é a proposta corrente
+    const doBob=c._bob&&!decidida;
+    const txt=decidida?c.decisao:(doBob?c._bob.reescrita:(c.correcao||''));
+    const coment=doBob?`<div class="bob-comment">${esc(c._bob.comment)}</div>`:'';
+    return`<div class="panel ${doBob?'panel-bob':'panel-edit'}">
+      <div class="p-label">${doBob?'✦ AJUSTAR A REESCRITA DO BOB':'EDITAR TEXTO REVISADO'}</div>
+      ${coment}
       <textarea class="p-ta" id="ta-${c.id}">${esc(txt)}</textarea>
       <div class="p-btns">
         <button class="btn btn-aplicar" onclick="conf('${c.id}')">Salvar e aplicar</button>
         <button class="btn btn-outline" onclick="fecharPanel('${c.id}')">Cancelar</button>
       </div></div>`;
   }
-  if(p==='teach'){
-    return`<div class="panel panel-teach">
-      <div class="p-label">ENSINAR O AGENTE</div>
-      <input class="p-in" id="teach-in-${c.id}"
-        placeholder="Ex.: manter números exatos quando vierem de fonte oficial">
-      <div class="p-btns">
-        <button class="btn btn-teach-save" onclick="confirmarEnsinar('${c.id}')">Salvar preferência</button>
-        <button class="btn btn-outline" onclick="fecharPanel('${c.id}')">Cancelar</button>
-      </div></div>`;
-  }
+  if(p==='bob')return bobPanelHTML(c.id);
   return'';
+}
+
+// Painel de feedback do Bob (reusado em linha de correção e de leitura)
+function bobPanelHTML(id){
+  const st=_bobState[id]||{};
+  const perg=st.pergunta?`<div class="bob-pergunta">✦ ${esc(st.pergunta)}</div>`:'';
+  const txtBtn=st.busy?'✦ Bob está reescrevendo…':'Mandar pro Bob';
+  return`<div class="panel panel-bob">
+    <div class="p-label">✦ PEDIR AO BOB</div>
+    ${perg}
+    <textarea class="p-ta" id="bobfb-${id}" ${st.busy?'disabled':''}
+      placeholder="O que não funcionou? (ex.: formal demais, longo, palavra difícil)"></textarea>
+    <div class="p-btns">
+      <button class="btn btn-bob-go" id="bobgo-${id}" onclick="bobEnviar('${id}')" ${st.busy?'disabled':''}>${txtBtn}</button>
+      <button class="btn btn-outline" onclick="bobFechar('${id}')">Cancelar</button>
+    </div></div>`;
 }
 
 function rowInner(c){
@@ -1613,11 +1840,44 @@ function renderTudo(){
   let num=1;
 
   function addCtx(texto,li){
+    const id=`ed-${li}`;
+    const c=getC(id);
+    const editada=!!(c&&c.decisao);
     const div=document.createElement('div');
     div.id=`row-leitura-${li}`;
-    div.className='ctx-row';
-    div.innerHTML=`<div class="fnum">§</div><div class="ctx-text">${esc(texto)}</div>`;
+    div.className='ctx-row'+(editada?' ctx-editada':'');
+    const acts=editada
+      ?`<span class="ctx-selo">✓ Editado</span>
+        <button class="ctx-btn" onclick="ctxEditar(${li})">Editar</button>
+        <button class="ctx-btn" onclick="ctxDesfazer(${li})">Desfazer</button>`
+      :`<button class="ctx-btn" onclick="ctxEditar(${li})">Editar</button>
+        <button class="ctx-btn is-bob" onclick="bob('${id}')">✦ Bob</button>`;
+    div.innerHTML=`<div class="fnum">§</div>
+      <div class="ctx-text">${esc(editada?c.decisao:texto)}</div>
+      <div class="ctx-acts">${acts}</div>`;
     rows.appendChild(div);
+    if(panels[id]==='bob'){
+      const p=document.createElement('div');
+      p.id=`panel-${id}`;
+      p.innerHTML=bobPanelHTML(id);
+      rows.appendChild(p.firstChild);
+    } else if(panels[id]==='edit'){
+      // Edição da linha; se veio do Bob, vem pré-preenchida com a reescrita + comentário
+      const bobR=_bobReescrita[id];
+      const valor=bobR?bobR.reescrita:(editada?c.decisao:texto);
+      const coment=bobR?`<div class="bob-comment">${esc(bobR.comment)}</div>`:'';
+      const p=document.createElement('div');
+      p.id=`panel-${id}`;
+      p.className='panel '+(bobR?'panel-bob':'panel-edit');
+      p.innerHTML=`<div class="p-label">${bobR?'✦ REESCRITA DO BOB':'EDITAR TRECHO'}</div>
+        ${coment}
+        <textarea class="p-ta" id="ta-${id}">${esc(valor)}</textarea>
+        <div class="p-btns">
+          <button class="btn btn-aplicar" onclick="ctxConf(${li})">Salvar e aplicar</button>
+          <button class="btn btn-outline" onclick="ctxFechar(${li})">Cancelar</button>
+        </div>`;
+      rows.appendChild(p);
+    }
   }
 
   function addSec(label){
@@ -1736,8 +1996,7 @@ function cardNota(n){
     :'<div class="np-trecho np-geral">Nota geral — sem trecho específico</div>';
   const acoes=decidida
     ?`<div class="np-ok-msg">✓ Transformada em correção — entra no Gravar:<br>«${esc(n.decisao.slice(0,90))}»</div>`
-    :((n.trecho_original?`<button class="btn btn-outline" onclick="npEditar('${n.id}')">Transformar em correção</button>`:'')
-      +`<button class="btn btn-teach" onclick="npEnsinar('${n.id}')">Ensinar</button>`);
+    :(n.trecho_original?`<button class="btn btn-outline" onclick="npEditar('${n.id}')">Transformar em correção</button>`:'');
   return `<div class="np-card${decidida?' np-decidida':''}" id="npc-${n.id}">
     <div class="np-meta"><span class="tag-c">${esc(n.camada)}</span>
       <span class="np-conf">${n.confianca||0}%</span></div>
@@ -1769,25 +2028,6 @@ function npConf(id){
 }
 
 function npCanc(id){const box=$id(`np-edit-${id}`);if(box)box.innerHTML='';}
-
-function npEnsinar(id){
-  const c=getC(id);if(!c)return;
-  const box=$id(`np-edit-${id}`);if(!box)return;
-  box.innerHTML=`<textarea class="p-ta" id="np-ta-${id}" placeholder="Ex.: esse tipo de observação não se aplica a este cliente."></textarea>
-    <div class="p-btns">
-      <button class="btn btn-teach-save" onclick="npEnsinarConf('${id}')">Salvar preferência</button>
-      <button class="btn btn-outline" onclick="npCanc('${id}')">Cancelar</button></div>`;
-  $id(`np-ta-${id}`).focus();
-}
-
-function npEnsinarConf(id){
-  const ta=$id(`np-ta-${id}`);if(!ta)return;
-  const texto=ta.value.trim();if(!texto)return;
-  const c=getC(id);if(!c)return;
-  fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id,decisao:c.decisao||'ensinar',motivo:texto})}).catch(()=>{});
-  npCanc(id);toast('Preferência registrada — o agente vai aprender ✓');
-}
 
 // ── Overflow dos blocos Antes/Depois/Porquê ──────────────────────────────────
 // Conteúdo nunca fica inacessível: bloco que excede as 3 linhas do clamp ganha
@@ -1856,6 +2096,7 @@ document.addEventListener('keydown',e=>{
   const tag=(e.target.tagName||'').toLowerCase();
   if(tag==='textarea'||tag==='input'||e.metaKey||e.ctrlKey||e.altKey)return;
   if(e.key==='Escape'){
+    if($id('apr-modal').classList.contains('show'))return; // janela decide por botões
     fecharPainelNotas();
     Object.keys(panels).forEach(id=>{if(panels[id])fecharPanel(id)});
     return;
@@ -1902,9 +2143,10 @@ function sync(id,motivo){
 
 function aplicar(id){
   const c=getC(id);if(!c||c.insercao_indefinida)return;
-  c.decisao=c.correcao||'aplicado';
+  // Se há uma reescrita do Bob pendente, é ela que se aplica (não a do agente)
+  c.decisao=(c._bob?c._bob.reescrita:c.correcao)||'aplicado';
   panels[id]=null;
-  salvar();sync(id);atualizarLinha(id,true);atualizarFooter();
+  salvar();sync(id,_bobFeedback[id]||'');atualizarLinha(id,true);atualizarFooter();
   const nx=nextPendingAfter(id);if(nx){focoId=nx;aplicarFoco();}
 }
 
@@ -1921,7 +2163,9 @@ function pular(id){
 
 function desfazer(id){
   const c=getC(id);if(!c)return;
-  c.decisao=null;panels[id]=null;
+  // Volta ao estado neutro: descarta também a reescrita pendente do Bob, senão a
+  // linha "gruda" na versão do Bob ao retomar (não dá pra voltar à do agente).
+  c.decisao=null;c._bob=null;delete _bobFeedback[id];panels[id]=null;
   salvar();sync(id);atualizarLinha(id);atualizarFooter();
 }
 
@@ -1943,34 +2187,132 @@ function conf(id){
   const novo=ta.value.trim();if(!novo)return;
   const c=getC(id);if(!c)return;
   c.decisao=novo;panels[id]=null;
-  salvar();sync(id);atualizarLinha(id,true);atualizarFooter();
+  salvar();sync(id,_bobFeedback[id]||'');atualizarLinha(id,true);atualizarFooter();
   const nx=nextPendingAfter(id);if(nx){focoId=nx;aplicarFoco();}
 }
 
-function ensinar(id){
-  panels[id]=panels[id]==='teach'?null:'teach';
-  atualizarLinha(id);
-  const inp=$id(`teach-in-${id}`);
-  if(inp){
-    inp.focus();
-    inp.addEventListener('keydown',ev=>{
-      if(ev.key==='Escape'){ev.preventDefault();fecharPanel(id)}
-      else if(ev.key==='Enter'){ev.preventDefault();confirmarEnsinar(id)}
+// ── ✦ Bob: reescritor sob demanda ────────────────────────────────────────────
+function bob(id){
+  const aberto=panels[id]==='bob';
+  panels[id]=aberto?null:'bob';
+  if(!aberto)_bobState[id]={};
+  if(id.startsWith('ed-'))renderTudo();else atualizarLinha(id);
+  bobFocoTextarea(id);
+}
+
+function bobFocoTextarea(id){
+  const ta=$id(`bobfb-${id}`);
+  if(!ta)return;
+  ta.focus();
+  ta.addEventListener('keydown',ev=>{
+    if(ev.key==='Escape'){ev.preventDefault();bobFechar(id);}
+    else if((ev.metaKey||ev.ctrlKey)&&ev.key==='Enter'){ev.preventDefault();bobEnviar(id);}
+  });
+}
+
+function bobFechar(id){
+  panels[id]=null;_bobState[id]={};
+  if(id.startsWith('ed-'))renderTudo();else atualizarLinha(id);
+}
+
+function _bobRerender(id){
+  if(id.startsWith('ed-'))renderTudo();else atualizarLinha(id);
+  if(!(_bobState[id]||{}).busy)bobFocoTextarea(id);
+}
+
+async function bobEnviar(id){
+  const ta=$id(`bobfb-${id}`);if(!ta)return;
+  const fb=ta.value.trim();
+  if(!fb){ta.focus();toast('O Bob precisa do seu feedback pra reescrever.','e');return;}
+  const ehLeitura=id.startsWith('ed-');
+  const c=getC(id);
+  let trecho,sugestao,agente;
+  if(ehLeitura){
+    const li=parseInt(id.slice(3),10);
+    trecho=(c&&c.decisao)?c.decisao:(((D.linhas||[])[li]||{}).texto||'');
+    sugestao='';agente='';
+  }else{
+    if(!c)return;
+    trecho=c.trecho_original||'';
+    sugestao=c._bob?c._bob.reescrita:(c.correcao||''); // no loop, a "anterior" é a última do Bob
+    agente=c.camada||'';
+  }
+  _bobState[id]={...(_bobState[id]||{}),busy:true};
+  _bobRerender(id);
+  try{
+    const r=await fetch('/api/bob',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({trecho_original:trecho,sugestao_anterior:sugestao,feedback:fb,agente:agente})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){toast(d.error||'O Bob não conseguiu responder','e');_bobState[id]={};_bobRerender(id);return;}
+    if(d.precisa_esclarecer){            // feedback vago: Bob devolve uma pergunta
+      _bobState[id]={pergunta:d.bob_comment,busy:false};
+      _bobRerender(id);return;
+    }
+    _bobFeedback[id]=fb;_bobState[id]={};
+    if(ehLeitura){
+      // Linha de leitura: a reescrita abre na edição da linha, pronta para salvar
+      _bobReescrita[id]={comment:d.bob_comment,reescrita:d.reescrita};
+      panels[id]='edit';renderTudo();
+    }else{
+      c._bob={comment:d.bob_comment,reescrita:d.reescrita};
+      panels[id]=null;atualizarLinha(id,true);
+    }
+    toast('✦ Bob reescreveu','s');
+  }catch(e){toast('Erro de conexão com o Bob','e');_bobState[id]={};_bobRerender(id);}
+}
+
+// Painéis de linha de leitura (ed-*) não têm linha própria p/ atualizarLinha:
+// re-renderiza tudo para o painel sumir junto
+function fecharPanel(id){
+  panels[id]=null;
+  if(id.startsWith('ed-'))renderTudo();
+  else atualizarLinha(id);
+}
+
+// ── Linhas de leitura (§): edição manual do trecho ───────────────────────────
+// O trecho editado vira uma correção sintética (tipo 'edicao') que entra no
+// Gravar como qualquer outra: trecho_original → decisao.
+function ctxEditar(li){
+  const id=`ed-${li}`;
+  panels[id]=panels[id]==='edit'?null:'edit';
+  renderTudo();
+  const ta=$id(`ta-${id}`);
+  if(ta){
+    ta.focus();ta.select();
+    ta.addEventListener('keydown',ev=>{
+      if(ev.key==='Escape'){ev.preventDefault();ctxFechar(li)}
+      else if((ev.metaKey||ev.ctrlKey)&&ev.key==='Enter'){ev.preventDefault();ctxConf(li)}
     });
   }
 }
 
-function confirmarEnsinar(id){
-  const inp=$id(`teach-in-${id}`);if(!inp)return;
-  const texto=inp.value.trim();if(!texto)return;
-  const c=getC(id);if(!c)return;
-  fetch('/api/decisao',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id,decisao:c.decisao||'ensinar',motivo:texto})}).catch(()=>{});
-  panels[id]=null;atualizarLinha(id);
-  toast('Preferência registrada — o agente vai aprender ✓');
+function ctxConf(li){
+  const id=`ed-${li}`;
+  const ta=$id(`ta-${id}`);if(!ta)return;
+  const novo=ta.value.trim();
+  const l=(D.linhas||[])[li];if(!l)return;
+  panels[id]=null;
+  const feedbackBob=_bobFeedback[id];delete _bobReescrita[id];
+  if(!novo||novo===l.texto){renderTudo();return;}
+  let c=getC(id);
+  if(!c){
+    c={id:id,tipo:'edicao',camada:'Editor',trecho_original:l.texto,decisao:novo};
+    D.correcoes.push(c);
+  } else c.decisao=novo;
+  if(feedbackBob)c._motivo=feedbackBob; // motivação real (feedback dado ao Bob)
+  salvar();renderTudo();
+  toast(feedbackBob?'✦ Reescrita do Bob aplicada':'Trecho editado, entra no Gravar ✓');
 }
 
-function fecharPanel(id){panels[id]=null;atualizarLinha(id)}
+function ctxDesfazer(li){
+  const id=`ed-${li}`;
+  const i=D.correcoes.findIndex(c=>c.id===id);
+  if(i>=0)D.correcoes.splice(i,1);
+  panels[id]=null;
+  salvar();renderTudo();
+}
+
+function ctxFechar(li){delete _bobReescrita[`ed-${li}`];fecharPanel(`ed-${li}`)}
 
 function atualizarLinha(id,flash){
   const c=getC(id);if(!c)return;
@@ -2005,11 +2347,17 @@ function atualizarFooter(){
 // ── Gravar no Google Docs ─────────────────────────────────────────────────────
 async function gravar(){
   if(!D.url_gdocs){toast('Sem URL do Google Docs. Reinicie: python3 revisar.py --gdocs "URL"','e');return;}
-  // Inclui notas transformadas em correção pelo revisor (decisao = texto escrito)
-  const aprovadas=D.correcoes.filter(c=>(c.tipo==='correcao'||c.tipo==='nota')
+  // Inclui notas transformadas em correção e edições manuais de linhas de leitura
+  const aprovadas=D.correcoes.filter(c=>(c.tipo==='correcao'||c.tipo==='nota'||c.tipo==='edicao')
       &&c.decisao&&c.decisao!=='pular'&&c.trecho_original)
     .map(c=>({trecho_original:c.trecho_original,decisao:c.decisao}));
   if(!aprovadas.length){toast('Nenhuma correção aprovada.','e');return}
+  // Fim do documento (último roteiro): a janela de aprendizados abre ANTES de
+  // gravar. Confirmar/descartar na janela rechama gravar() com o flag resolvido.
+  if(!(D.meta||{}).proximo_titulo&&!_aprChecado){
+    await checarAprendizados();
+    if(!_aprChecado)return;
+  }
   const btn=$id('btn-gravar'),txt=$id('btn-gravar-txt');
   btn.disabled=true;txt.textContent='Gravando...';
   try{
@@ -2029,6 +2377,244 @@ async function gravar(){
     btn.disabled=bp>0;
   }
 }
+
+// ── Janela de aprendizados (fim do documento) ────────────────────────────────
+// Compila os sinais da sessão inteira (pular/editar/aplicar) e mostra os
+// aprendizados candidatos para o revisor confirmar antes de gravar no Docs.
+let _aprChecado=false; // resolvido (confirmado/descartado/sem candidatos) → gravar segue
+let _aprCands=null;    // cache dos candidatos (reabrir a janela não re-chama a LLM)
+
+async function checarAprendizados(){
+  if(_aprCands){renderAprendizados();return;}
+  const loading=$id('loading');
+  $id('loading-msg').textContent='Compilando os aprendizados da sessão...';
+  loading.classList.add('show');
+  try{
+    const r=await fetch('/api/aprendizados/candidatos',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({edicoes_leitura:coletarEdicoesLeitura()})});
+    const d=await r.json().catch(()=>({}));
+    const cands=(r.ok&&d&&d.candidatos)||[];
+    if(!cands.length){_aprChecado=true;return;} // sem aprendizados → grava direto
+    // Generalizáveis vêm marcadas (viram regra); pontuais desmarcadas (registro)
+    _aprCands=cands.map((c,i)=>({...c,_i:i,_on:c.generalizavel!==false}));
+    renderAprendizados();
+  }catch(e){_aprChecado=true} // falha na compilação nunca trava a gravação
+  finally{loading.classList.remove('show')}
+}
+
+// Edições de linhas de leitura § de TODOS os roteiros da sessão (vivem no
+// localStorage, não nos achados) — entram na destilação como edições do usuário.
+function coletarEdicoesLeitura(){
+  const out=[];
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(k&&k.startsWith(`vml_${SESSAO}_`)&&k.endsWith('_ed')){
+      try{(JSON.parse(localStorage.getItem(k))||[]).forEach(e=>{
+        if(e.trecho_original&&e.decisao)
+          out.push({trecho_original:e.trecho_original,decisao:e.decisao,motivo:e.motivo||''});
+      });}catch(_){}
+    }
+  }
+  return out;
+}
+
+const APR_ORIGEM={pular:'de um Pular',editar:'de uma Edição',aplicar:'de Aplicados',manual:'Manual'};
+
+function aprItemHTML(c){
+  const cli=D.roteiro.cliente||'';
+  const chips=[c.camada?`<span class="tag-c">${esc(c.camada)}</span>`:'',
+    c.tema?`<span class="tag-c">tema: ${esc(c.tema)}</span>`:'',
+    c.estrutura_codex?`<span class="tag-c">${esc(c.estrutura_codex)}</span>`:''].join('');
+  const escopo=cli
+    ?`<select class="apr-esc" id="apr-esc-${c._i}">
+        <option value="global"${c.escopo!=='cliente'?' selected':''}>Global</option>
+        <option value="cliente"${c.escopo==='cliente'?' selected':''}>Só ${esc(cli)}</option>
+      </select>`
+    :'<span class="tag-c">Global</span>';
+  const trecho=c.trecho?`<div class="apr-trecho">sobre: “${esc(c.trecho)}”</div>`:'';
+  const motiv=c.motivacao?`<div class="apr-motiv">Motivação: ${esc(c.motivacao)}</div>`:'';
+  return`<div class="apr-item${c._on?'':' off'}" id="apr-it-${c._i}">
+    <input type="checkbox" class="apr-check"${c._on?' checked':''}
+      onchange="aprToggle(${c._i},this.checked)">
+    <div>
+      <textarea class="apr-tx" id="apr-tx-${c._i}">${esc(c.texto)}</textarea>
+      ${trecho}${motiv}
+      <div class="apr-meta">${escopo}${chips}
+        <span class="apr-origem apr-o-${c.origem}">${APR_ORIGEM[c.origem]||c.origem}</span></div>
+    </div></div>`;
+}
+
+function renderAprendizados(){
+  // Restaura o modo candidato (a janela pode ter ficado em modo promoção)
+  $id('apr-t').textContent='🧠 Aprendizados desta sessão';
+  $id('apr-add').style.display='';
+  const sec=$id('apr-sec'),pri=$id('apr-pri');
+  sec.textContent='Gravar sem salvar';sec.onclick=aprPular;
+  pri.textContent='Salvar e gravar no Docs';pri.onclick=aprConfirmar;
+  // Generalizáveis (viram regra, marcadas) no topo; pontuais num bloco recolhido
+  const ger=_aprCands.filter(c=>c.generalizavel!==false);
+  const pon=_aprCands.filter(c=>c.generalizavel===false);
+  let html=ger.length?ger.map(aprItemHTML).join(''):'<div class="np-vazio">Nenhuma regra nova desta vez.</div>';
+  if(pon.length){
+    html+=`<details class="apr-pontuais"><summary>${pon.length} ajuste(s) pontual(is): `
+      +`a lição de cada edição específica. Não viram regra; marque se quiser guardar.</summary>`
+      +pon.map(aprItemHTML).join('')+`</details>`;
+  }
+  $id('apr-lista').innerHTML=html;
+  aprContagem();
+  $id('apr-modal').classList.add('show');
+}
+
+function aprToggle(i,on){
+  const c=_aprCands.find(c=>c._i===i);if(c)c._on=on;
+  const it=$id(`apr-it-${i}`);if(it)it.classList.toggle('off',!on);
+  aprContagem();
+}
+
+function aprContagem(){
+  const n=_aprCands.filter(c=>c._on).length;
+  $id('apr-count').textContent=`${n} de ${_aprCands.length} selecionado(s)`;
+}
+
+// Sincroniza texto/escopo editados no DOM de volta aos candidatos
+function aprSync(){
+  _aprCands.forEach(c=>{
+    const ta=$id(`apr-tx-${c._i}`);if(ta)c.texto=ta.value;
+    const se=$id(`apr-esc-${c._i}`);if(se)c.escopo=se.value;
+  });
+}
+
+function aprAdicionar(){
+  const inp=$id('apr-novo');
+  const t=(inp.value||'').trim();if(!t)return;
+  aprSync();
+  _aprCands.push({texto:t,motivacao:'',generalizavel:true,trecho:'',escopo:'global',
+    tema:'',estrutura_codex:'',camada:'',origem:'manual',_i:_aprCands.length,_on:true});
+  inp.value='';
+  renderAprendizados();
+}
+
+async function aprConfirmar(){
+  aprSync();
+  const cli=D.roteiro.cliente||'';
+  const sel=_aprCands.filter(c=>c._on&&c.texto.trim()).map(c=>({
+    texto:c.texto.trim(),
+    motivacao:c.motivacao||'',
+    escopo:(c.escopo==='cliente'&&cli)?'cliente':'global',
+    cliente:(c.escopo==='cliente'&&cli)?cli:null,
+    tema:c.tema||null,
+    estrutura_codex:c.estrutura_codex||null,
+    camada:c.camada||null,
+    origem:c.origem||'manual',
+  }));
+  let novosIds=[];
+  if(sel.length){
+    try{
+      const r=await fetch('/api/aprendizados/salvar',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({aprendizados:sel})});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok){toast(`🧠 ${sel.length} aprendizado(s) salvo(s)`,'s');novosIds=d.ids||[];}
+      else toast('Erro ao salvar aprendizados, a gravação segue','e');
+    }catch(e){toast('Erro ao salvar aprendizados, a gravação segue','e')}
+  }
+  // Promoção sugerida: a mesma preferência ensinada a clientes diferentes pode
+  // virar global. Só checa se algo foi salvo agora (senão não há o que repetir).
+  const promos=novosIds.length?await checarPromocoes(novosIds):[];
+  if(promos.length){
+    _aprPromos=promos.map((p,i)=>({...p,_i:i,_on:true}));
+    renderPromocoes(); // 2ª etapa na mesma janela; gravar só depois
+    return;
+  }
+  aprFinalizar();
+}
+
+function aprPular(){
+  // Descarta os candidatos (não voltam — são compilados por sessão) e grava
+  aprFinalizar();
+}
+
+function aprFinalizar(){
+  _aprChecado=true;
+  $id('apr-modal').classList.remove('show');
+  gravar(); // segue o fluxo normal: grava no Docs e avança
+}
+
+// ── 2ª etapa: promoção de aprendizados de cliente → global ───────────────────
+let _aprPromos=null;
+
+async function checarPromocoes(novosIds){
+  const loading=$id('loading');
+  $id('loading-msg').textContent='Procurando preferências repetidas entre clientes...';
+  loading.classList.add('show');
+  try{
+    const r=await fetch('/api/aprendizados/promocoes',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({novos_ids:novosIds})});
+    const d=await r.json().catch(()=>({}));
+    return (r.ok&&d.promocoes)||[];
+  }catch(e){return[]}      // falha na detecção nunca trava a gravação
+  finally{loading.classList.remove('show')}
+}
+
+function renderPromocoes(){
+  $id('apr-t').textContent='💡 Promover a global?';
+  $id('apr-sub').innerHTML='Estas preferências você ensinou em <b>clientes diferentes</b>, '+
+    'o que sugere um gosto seu, não algo específico de um cliente. Marque as que devem '+
+    'valer para <b>todos</b> os clientes: o texto global substitui os de origem. O que '+
+    'deixar desmarcado continua como está (cada um no seu cliente).';
+  $id('apr-add').style.display='none';
+  $id('apr-lista').innerHTML=_aprPromos.map(p=>{
+    const exs=p.exemplos.map(e=>
+      `<div class="apr-ex"><b>${esc(e.cliente)}:</b> ${esc(e.texto)}</div>`).join('');
+    return`<div class="apr-item${p._on?'':' off'}" id="apr-pit-${p._i}">
+      <input type="checkbox" class="apr-check"${p._on?' checked':''}
+        onchange="aprPromoToggle(${p._i},this.checked)">
+      <div>
+        <textarea class="apr-tx" id="apr-ptx-${p._i}">${esc(p.texto_global)}</textarea>
+        <div class="apr-meta">
+          <span class="tag-c">global</span>
+          ${p.camada?`<span class="tag-c">${esc(p.camada)}</span>`:''}
+          <span class="apr-origem apr-o-manual">${p.clientes.length} clientes</span>
+        </div>
+        <div class="apr-exs">${exs}</div>
+      </div></div>`;
+  }).join('');
+  $id('apr-count').textContent=
+    `${_aprPromos.filter(p=>p._on).length} de ${_aprPromos.length} para promover`;
+  const sec=$id('apr-sec'),pri=$id('apr-pri');
+  sec.textContent='Agora não — só gravar';sec.onclick=aprPromoPular;
+  pri.textContent='Promover e gravar';pri.onclick=aprPromoAplicar;
+}
+
+function aprPromoToggle(i,on){
+  const p=_aprPromos.find(p=>p._i===i);if(p)p._on=on;
+  const it=$id(`apr-pit-${i}`);if(it)it.classList.toggle('off',!on);
+  $id('apr-count').textContent=
+    `${_aprPromos.filter(p=>p._on).length} de ${_aprPromos.length} para promover`;
+}
+
+function aprPromoSync(){
+  _aprPromos.forEach(p=>{const ta=$id(`apr-ptx-${p._i}`);if(ta)p.texto_global=ta.value;});
+}
+
+async function aprPromoAplicar(){
+  aprPromoSync();
+  const promover=_aprPromos.filter(p=>p._on&&p.texto_global.trim())
+    .map(p=>({ids:p.ids,texto_global:p.texto_global.trim(),camada:p.camada||null}));
+  if(promover.length){
+    try{
+      const r=await fetch('/api/aprendizados/promover',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({promover})});
+      if(r.ok)toast(`⬆ ${promover.length} aprendizado(s) promovido(s) a global`,'s');
+      else toast('Erro ao promover — a gravação segue','e');
+    }catch(e){toast('Erro ao promover — a gravação segue','e')}
+  }
+  aprFinalizar();
+}
+
+function aprPromoPular(){aprFinalizar()}
 
 // ── Navegação entre roteiros já revisados (Voltar / re-Avançar) ──────────────
 async function navegar(delta){
@@ -2064,6 +2650,7 @@ async function continuar(){
     if(d.recarregar){
       const r2=await fetch('/api/dados');D=await r2.json();
       localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
+      localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}_ed`);
       focoId=null;
       Object.keys(panels).forEach(k=>delete panels[k]);
       carregar();renderTudo();window.scrollTo(0,0);
@@ -2087,9 +2674,12 @@ function novaRevisao(){
 // ── Resetar / Exportar ────────────────────────────────────────────────────────
 function resetar(){
   if(!confirm('Resetar todas as decisões?'))return;
+  D.correcoes=D.correcoes.filter(c=>c.tipo!=='edicao');
   D.correcoes.forEach(c=>{if(c.decisao!==null){c.decisao=null;sync(c.id)}});
   Object.keys(panels).forEach(k=>delete panels[k]);
-  localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);renderTudo();
+  localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}`);
+  localStorage.removeItem(`vml_${SESSAO}_${D.roteiro.id}_ed`);
+  renderTudo();
 }
 
 function exportar(){

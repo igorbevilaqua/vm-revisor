@@ -1,0 +1,9 @@
+# Aprendizados do editor: log append-only (1 snapshot de registro por linha).
+# `merge=union` faz o git SOMAR as linhas dos dois lados num merge/rebase, em
+# vez de marcar conflito — assim os aprendizados de pessoas diferentes se
+# acumulam (ninguém sobrescreve o do outro). Ids são únicos, então não colidem.
+aprendizados.jsonl merge=union
+
+# Se um dia o ledger de decisões deixar de ser ignorado e passar a ser
+# compartilhado, ele segue a mesma regra (também é append-only):
+decisoes.jsonl merge=union
