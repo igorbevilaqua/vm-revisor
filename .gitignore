@@ -1,3 +1,6 @@
+# Chave de API pessoal (cada pessoa põe a sua; use config.exemplo.txt de modelo)
+config.txt
+
 # Tokens OAuth pessoais (cada pessoa gera o próprio ao autenticar)
 credentials/token.pickle
 credentials/token_write.pickle
