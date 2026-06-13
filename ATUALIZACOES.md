@@ -32,6 +32,11 @@ pontos, vírgula ou conectivo natural.
 
 ## PENDENTES (ainda não anunciadas)
 
+_(nada pendente)_
+
+## PUBLICADAS (histórico)
+
+### 2026-06-13
 - **Conheça o Bob, seu reescritor de plantão:** Não gostou de uma sugestão? Clica em ✦ Bob, diz em uma linha o que está errado (formal demais, longo, palavra difícil) e ele devolve uma versão melhor na hora, na voz do seu roteiro. Pode pedir quantas vezes quiser até ficar do seu jeito. Se o seu recado for vago, ele pergunta antes de chutar.
 - **O sistema aprende com cada ajuste seu:** Agora toda edição que você faz vira uma lição. Ao final do documento, a tela de aprendizados mostra o que o sistema entendeu de cada mudança e por que você provavelmente fez. As que valem como regra já vêm marcadas; os ajustes específicos ficam guardados à parte. Você continua decidindo o que vira regra de verdade.
 - **Edite qualquer parte do roteiro:** Antes você só podia mexer nos trechos que o sistema marcou. Agora todo parágrafo tem o botão Editar: se algo não te agradou e o sistema deixou passar, você ajusta na hora e a mudança vai direto pro Google Docs.
@@ -39,7 +44,3 @@ pontos, vírgula ou conectivo natural.
 - **O sistema aprende o estilo de cada cliente:** As preferências que você ensina ficam ligadas ao cliente certo. O jeito de falar de um cliente não atrapalha os outros: cada um mantém a sua voz.
 - **Quando vira hábito, o sistema sugere virar regra da casa:** Se você ensina a mesma preferência em clientes diferentes, o sistema percebe e pergunta se aquilo é um gosto seu que vale para todos os roteiros.
 - **Aprendizado em equipe, o que um ensina todos recebem:** As preferências que qualquer pessoa do time ensina passam a ser compartilhadas automaticamente. Ninguém precisa repetir o que o outro já ensinou, e todos trabalham com o sistema cada vez mais afiado.
-
-## PUBLICADAS (histórico)
-
-_(nada publicado ainda)_
